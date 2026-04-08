@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "name": "Review Write Operations",
+  "description": "Before any file write, review the code to ensure it follows project standards including clean code, proper error handling, and security best practices.",
+  "version": "1",
+  "when": {
+    "type": "preToolUse",
+    "toolTypes": [
+      "write"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Before writing this file, verify the code follows the project standards: clean and readable code, meaningful names, proper error handling, no hardcoded secrets, and consistent code style."
+  }
+}

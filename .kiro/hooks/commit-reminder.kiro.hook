@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Commit Reminder",
+  "description": "After the agent stops working, remind to commit any pending changes with a clear commit message.",
+  "version": "1",
+  "when": {
+    "type": "agentStop"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Check if there are any uncommitted changes using git status. If there are, suggest a clear commit message in imperative mood and offer to commit them."
+  }
+}

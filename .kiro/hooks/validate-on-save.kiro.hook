@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "name": "Validate on Save",
+  "description": "When a TypeScript or JavaScript file is saved, check for diagnostics and report any issues.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "*.ts",
+      "*.tsx",
+      "*.js",
+      "*.jsx"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Run diagnostics on the edited file and report any errors or warnings. Suggest fixes if issues are found."
+  }
+}
