@@ -1,6 +1,34 @@
 """SQLite-based storage for cloud accounts and scan results (PoC).
 
 Supports AWS, Azure, and GCP accounts with encrypted credential storage.
+
+Encryption
+----------
+Credentials are encrypted at rest using Fernet symmetric encryption
+(from the ``cryptography`` library).
+
+Key location:
+    ``~/.finxcloud/.fernet.key``
+    (sibling of the SQLite database file)
+
+File permissions:
+    The key file is created with mode ``0o600`` (owner read/write only).
+    Ensure the parent directory is also restricted to the service user.
+
+Key rotation procedure:
+    1. Generate a new Fernet key: ``Fernet.generate_key()``
+    2. Decrypt all credential fields using the old key.
+    3. Re-encrypt all credential fields using the new key.
+    4. Replace the contents of ``~/.finxcloud/.fernet.key`` with the new key.
+    5. Verify decryption works before removing the old key backup.
+
+Impact of key loss:
+    If the Fernet key file is lost or corrupted, **all encrypted credential
+    fields become permanently unrecoverable**. The SQLite database will still
+    be readable, but encrypted columns (``access_key_enc``,
+    ``secret_key_enc``, ``credentials_json_enc``) will raise
+    ``cryptography.fernet.InvalidToken`` on decryption attempts.
+    Back up the key file alongside regular database backups.
 """
 
 from __future__ import annotations
@@ -15,6 +43,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cryptography.fernet import Fernet
+
+__all__ = [
+    "list_accounts",
+    "get_account",
+    "create_account",
+    "update_account",
+    "delete_account",
+    "save_scan_result",
+    "get_latest_scan",
+    "list_scans",
+]
 
 _DB_PATH = os.environ.get(
     "FINXCLOUD_DB_PATH",
@@ -200,8 +239,9 @@ def touch_account_scan(account_id: str) -> None:
 # Scan result storage
 # ---------------------------------------------------------------------------
 
-def save_scan_result(account_id: str, result: dict) -> str:
-    scan_id = str(uuid.uuid4())[:8]
+def save_scan_result(account_id: str, result: dict, scan_id: str | None = None) -> str:
+    if scan_id is None:
+        scan_id = str(uuid.uuid4())[:8]
     now = datetime.now(timezone.utc).isoformat()
     _conn().execute(
         "INSERT INTO scan_results (id, account_id, scanned_at, status, result_json) VALUES (?, ?, ?, ?, ?)",

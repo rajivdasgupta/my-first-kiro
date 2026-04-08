@@ -23,7 +23,8 @@ reports/*.json
 reports/*.html
 
 # IDE
-.vscode/
+.vscode/*
+!.vscode/settings.json
 .idea/
 *.swp
 *.swo

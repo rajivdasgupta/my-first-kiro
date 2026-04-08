@@ -16,9 +16,10 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, SecretStr
 
 from finxcloud.web.auth import authenticate, require_auth
+from finxcloud.utils.cost import merge_cost_data
 from finxcloud.web.storage import (
     create_account,
     delete_account,
@@ -54,11 +55,32 @@ logging.basicConfig(level=logging.INFO)
 STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(title="FinXCloud Dashboard", version="0.2.0")
+
+__all__ = ["app"]
+
+__all__ = ["app"]
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # In-memory scan state (PoC — single concurrent scan)
 _scan_lock = threading.Lock()
 _scans: dict[str, dict] = {}
+
+
+def _lookup_persisted_scan(scan_id: str) -> dict | None:
+    """Fallback: look up a scan result from persistent storage by scan ID."""
+    try:
+        from finxcloud.web.storage import _conn
+        row = _conn().execute(
+            "SELECT id, account_id, scanned_at, status, result_json FROM scan_results WHERE id = ?",
+            (scan_id,),
+        ).fetchone()
+        if row:
+            d = dict(row)
+            d["result"] = json.loads(d.pop("result_json")) if d.get("result_json") else None
+            return d
+    except Exception:
+        log.debug("Fallback scan lookup failed for %s", scan_id)
+    return None
 
 
 class LoginRequest(BaseModel):
@@ -69,8 +91,8 @@ class LoginRequest(BaseModel):
 class ScanRequest(BaseModel):
     provider: str = "aws"
     access_key: str = ""
-    secret_key: str = ""
-    session_token: str | None = None
+    secret_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    session_token: SecretStr | None = Field(default=None, repr=False)
     region: str = "us-east-1"
     role_arn: str | None = None
     org_scan: bool = False
@@ -85,45 +107,45 @@ class ScanRequest(BaseModel):
     # Azure fields
     azure_tenant_id: str | None = None
     azure_client_id: str | None = None
-    azure_client_secret: str | None = None
+    azure_client_secret: SecretStr | None = Field(default=None, repr=False)
     azure_subscription_id: str | None = None
     # GCP fields
     gcp_project_id: str | None = None
-    gcp_service_account_json: str | None = None
+    gcp_service_account_json: SecretStr | None = Field(default=None, repr=False)
 
 
 class AccountRequest(BaseModel):
     name: str
     provider: str = "aws"
     access_key: str = ""
-    secret_key: str = ""
+    secret_key: SecretStr = Field(default=SecretStr(""), repr=False)
     region: str = "us-east-1"
     role_arn: str | None = None
     org_scan: bool = False
     # Azure fields
     azure_tenant_id: str | None = None
     azure_client_id: str | None = None
-    azure_client_secret: str | None = None
+    azure_client_secret: SecretStr | None = Field(default=None, repr=False)
     azure_subscription_id: str | None = None
     # GCP fields
     gcp_project_id: str | None = None
-    gcp_service_account_json: str | None = None
+    gcp_service_account_json: SecretStr | None = Field(default=None, repr=False)
 
 
 class AccountUpdateRequest(BaseModel):
     name: str | None = None
     provider: str | None = None
     access_key: str | None = None
-    secret_key: str | None = None
+    secret_key: SecretStr | None = Field(default=None, repr=False)
     region: str | None = None
     role_arn: str | None = None
     org_scan: bool | None = None
     azure_tenant_id: str | None = None
     azure_client_id: str | None = None
-    azure_client_secret: str | None = None
+    azure_client_secret: SecretStr | None = Field(default=None, repr=False)
     azure_subscription_id: str | None = None
     gcp_project_id: str | None = None
-    gcp_service_account_json: str | None = None
+    gcp_service_account_json: SecretStr | None = Field(default=None, repr=False)
 
 
 class EmailReportRequest(BaseModel):
@@ -187,18 +209,18 @@ async def api_create_account(req: AccountRequest, _user: dict = Depends(require_
         provider_creds = {
             "tenant_id": req.azure_tenant_id or "",
             "client_id": req.azure_client_id or "",
-            "client_secret": req.azure_client_secret or "",
+            "client_secret": req.azure_client_secret.get_secret_value() if req.azure_client_secret else "",
             "subscription_id": req.azure_subscription_id or "",
         }
     elif req.provider == "gcp":
         provider_creds = {
             "project_id": req.gcp_project_id or "",
-            "service_account_json": req.gcp_service_account_json or "",
+            "service_account_json": req.gcp_service_account_json.get_secret_value() if req.gcp_service_account_json else "",
         }
     acct = create_account(
         name=req.name,
         access_key=req.access_key,
-        secret_key=req.secret_key,
+        secret_key=req.secret_key.get_secret_value(),
         region=req.region,
         role_arn=req.role_arn,
         org_scan=req.org_scan,
@@ -229,7 +251,12 @@ async def api_get_account(account_id: str, _user: dict = Depends(require_auth)):
 
 @app.patch("/api/accounts/{account_id}")
 async def api_update_account(account_id: str, req: AccountUpdateRequest, _user: dict = Depends(require_auth)):
-    fields = {k: v for k, v in req.model_dump().items() if v is not None}
+    fields = {}
+    for k, v in req.model_dump(exclude_none=True).items():
+        if isinstance(v, SecretStr):
+            fields[k] = v.get_secret_value()
+        else:
+            fields[k] = v
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to update")
     ok = update_account(account_id, **fields)
@@ -272,7 +299,7 @@ async def start_scan(req: ScanRequest, _user: dict = Depends(require_auth)):
             raise HTTPException(status_code=404, detail="Stored account not found")
         req.provider = acct.get("provider", "aws")
         req.access_key = acct.get("access_key", "")
-        req.secret_key = acct.get("secret_key", "")
+        req.secret_key = SecretStr(acct.get("secret_key", ""))
         req.region = acct.get("region", req.region)
         req.role_arn = acct.get("role_arn") or req.role_arn
         req.org_scan = bool(acct.get("org_scan", req.org_scan))
@@ -281,11 +308,11 @@ async def start_scan(req: ScanRequest, _user: dict = Depends(require_auth)):
         if req.provider == "azure":
             req.azure_tenant_id = creds.get("tenant_id")
             req.azure_client_id = creds.get("client_id")
-            req.azure_client_secret = creds.get("client_secret")
+            req.azure_client_secret = SecretStr(creds.get("client_secret", ""))
             req.azure_subscription_id = creds.get("subscription_id")
         elif req.provider == "gcp":
             req.gcp_project_id = creds.get("project_id")
-            req.gcp_service_account_json = creds.get("service_account_json")
+            req.gcp_service_account_json = SecretStr(creds.get("service_account_json", ""))
 
     scan_id = str(uuid.uuid4())[:8]
     _scans[scan_id] = {
@@ -304,6 +331,14 @@ async def start_scan(req: ScanRequest, _user: dict = Depends(require_auth)):
 async def get_scan_status(scan_id: str, _user: dict = Depends(require_auth)):
     scan = _scans.get(scan_id)
     if not scan:
+        persisted = _lookup_persisted_scan(scan_id)
+        if persisted:
+            return {
+                "scan_id": scan_id,
+                "status": persisted.get("status", "done"),
+                "progress": "Scan complete",
+                "error": None,
+            }
         raise HTTPException(status_code=404, detail="Scan not found")
     return {
         "scan_id": scan_id,
@@ -317,6 +352,9 @@ async def get_scan_status(scan_id: str, _user: dict = Depends(require_auth)):
 async def get_scan_results(scan_id: str, _user: dict = Depends(require_auth)):
     scan = _scans.get(scan_id)
     if not scan:
+        persisted = _lookup_persisted_scan(scan_id)
+        if persisted and persisted.get("result"):
+            return persisted["result"]
         raise HTTPException(status_code=404, detail="Scan not found")
     if scan["status"] == "running":
         raise HTTPException(status_code=202, detail="Scan still running")
@@ -403,14 +441,14 @@ def _run_cloud_provider_scan(scan_id: str, req: ScanRequest, scan: dict, provide
         creds = AzureCloudCredentials(
             tenant_id=req.azure_tenant_id or "",
             client_id=req.azure_client_id or "",
-            client_secret=req.azure_client_secret or "",
+            client_secret=req.azure_client_secret.get_secret_value() if req.azure_client_secret else "",
             subscription_id=req.azure_subscription_id or "",
             region=req.region,
         )
     else:
         creds = GCPCloudCredentials(
             project_id=req.gcp_project_id or "",
-            service_account_json=req.gcp_service_account_json or "",
+            service_account_json=req.gcp_service_account_json.get_secret_value() if req.gcp_service_account_json else "",
             region=req.region,
         )
 
@@ -452,7 +490,7 @@ def _run_cloud_provider_scan(scan_id: str, req: ScanRequest, scan: dict, provide
             "daily_trend": [], "total_cost_30d": 0.0,
         }
 
-    merged_cost_data = _merge_cost_data(all_cost_data)
+    merged_cost_data = merge_cost_data(all_cost_data)
 
     # Recommendations
     scan["progress"] = "Generating recommendations..."
@@ -481,8 +519,11 @@ def _run_cloud_provider_scan(scan_id: str, req: ScanRequest, scan: dict, provide
     })
 
     stored_acct_id = scan.get("stored_account_id")
-    if stored_acct_id:
-        save_scan_result(stored_acct_id, result)
+    persist_acct_id = stored_acct_id or "adhoc"
+    try:
+        save_scan_result(persist_acct_id, result, scan_id=scan_id)
+    except Exception:
+        log.exception("Failed to persist scan result for account %s", persist_acct_id)
 
     scan["result"] = result
     scan["status"] = "done"
@@ -498,8 +539,8 @@ def _run_aws_scan(scan_id: str, req: ScanRequest, scan: dict) -> None:
     scan["progress"] = "Validating AWS credentials..."
     creds = AWSCredentials(
         access_key_id=req.access_key,
-        secret_access_key=req.secret_key,
-        session_token=req.session_token,
+        secret_access_key=req.secret_key.get_secret_value(),
+        session_token=req.session_token.get_secret_value() if req.session_token else None,
         region=req.region,
         role_arn=req.role_arn,
     )
@@ -569,7 +610,7 @@ def _run_aws_scan(scan_id: str, req: ScanRequest, scan: dict) -> None:
             }
 
     # Merge cost data
-    merged_cost_data = _merge_cost_data(all_cost_data)
+    merged_cost_data = merge_cost_data(all_cost_data)
 
     # Cost Intelligence: Anomaly detection
     anomaly_data = {}
@@ -669,10 +710,13 @@ def _run_aws_scan(scan_id: str, req: ScanRequest, scan: dict) -> None:
         "provider": "aws",
     })
 
-    # Persist scan result if linked to a stored account
+    # Persist scan result
     stored_acct_id = scan.get("stored_account_id")
-    if stored_acct_id:
-        save_scan_result(stored_acct_id, result)
+    persist_acct_id = stored_acct_id or "adhoc"
+    try:
+        save_scan_result(persist_acct_id, result, scan_id=scan_id)
+    except Exception:
+        log.exception("Failed to persist scan result for account %s", persist_acct_id)
 
     scan["result"] = result
     scan["status"] = "done"
@@ -783,8 +827,8 @@ def _build_report_email_html(data: dict) -> str:
 
 class S3ReportRequest(BaseModel):
     access_key: str
-    secret_key: str
-    session_token: str | None = None
+    secret_key: SecretStr = Field(repr=False)
+    session_token: SecretStr | None = Field(default=None, repr=False)
     region: str = "us-east-1"
     bucket: str
     prefix: str = ""
@@ -795,8 +839,8 @@ async def list_s3_reports(req: S3ReportRequest, _user: dict = Depends(require_au
     """List available reports in an S3 bucket."""
     creds = AWSCredentials(
         access_key_id=req.access_key,
-        secret_access_key=req.secret_key,
-        session_token=req.session_token,
+        secret_access_key=req.secret_key.get_secret_value(),
+        session_token=req.session_token.get_secret_value() if req.session_token else None,
         region=req.region,
     )
     session = create_session(creds)
@@ -809,8 +853,8 @@ async def get_s3_report(req: S3ReportRequest, filename: str = Query(...), _user:
     """Read a specific JSON report from S3."""
     creds = AWSCredentials(
         access_key_id=req.access_key,
-        secret_access_key=req.secret_key,
-        session_token=req.session_token,
+        secret_access_key=req.secret_key.get_secret_value(),
+        session_token=req.session_token.get_secret_value() if req.session_token else None,
         region=req.region,
     )
     session = create_session(creds)
@@ -1117,47 +1161,3 @@ async def slack_events(request: Request):
 
     result = bot.handle_event(payload)
     return JSONResponse(content=result)
-
-
-# ---------------------------------------------------------------------------
-# Merge helper
-# ---------------------------------------------------------------------------
-
-def _merge_cost_data(cost_data_by_account: dict) -> dict:
-    """Merge cost data from multiple accounts."""
-    if len(cost_data_by_account) == 1:
-        return next(iter(cost_data_by_account.values()))
-
-    merged = {
-        "by_service": [], "by_region": [], "by_account": [],
-        "daily_trend": [], "total_cost_30d": 0.0,
-    }
-    service_totals: dict[str, float] = {}
-    region_totals: dict[str, float] = {}
-    daily_totals: dict[str, float] = {}
-
-    for account_id, data in cost_data_by_account.items():
-        merged["total_cost_30d"] += data.get("total_cost_30d", 0.0)
-        merged["by_account"].append({
-            "account": account_id, "amount": data.get("total_cost_30d", 0.0),
-            "unit": "USD", "currency": "USD",
-        })
-        for entry in data.get("by_service", []):
-            service_totals[entry["service"]] = service_totals.get(entry["service"], 0) + float(entry["amount"])
-        for entry in data.get("by_region", []):
-            region_totals[entry.get("region", "unknown")] = region_totals.get(entry.get("region", "unknown"), 0) + float(entry["amount"])
-        for entry in data.get("daily_trend", []):
-            daily_totals[entry["date"]] = daily_totals.get(entry["date"], 0) + float(entry["amount"])
-
-    merged["by_service"] = [
-        {"service": k, "amount": v, "unit": "USD", "currency": "USD"}
-        for k, v in sorted(service_totals.items(), key=lambda x: x[1], reverse=True)
-    ]
-    merged["by_region"] = [
-        {"region": k, "amount": v, "unit": "USD", "currency": "USD"}
-        for k, v in sorted(region_totals.items(), key=lambda x: x[1], reverse=True)
-    ]
-    merged["daily_trend"] = [
-        {"date": k, "amount": v} for k, v in sorted(daily_totals.items())
-    ]
-    return merged

@@ -8,12 +8,21 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 import time
 from typing import Optional
 
-import jwt
+logger = logging.getLogger(__name__)
+
+try:
+    import jwt
+except ImportError:
+    raise ImportError(
+        "PyJWT is required for the web module. "
+        "Install it with: pip install finxcloud[web]"
+    )
 from fastapi import Cookie, HTTPException, Request
 
 # Config via env vars (defaults for local dev)
@@ -21,6 +30,35 @@ ADMIN_USERNAME = os.environ.get("FINXCLOUD_ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.environ.get("FINXCLOUD_ADMIN_PASS", "admin")
 JWT_SECRET = os.environ.get("FINXCLOUD_JWT_SECRET", secrets.token_hex(32))
 JWT_EXPIRY_HOURS = int(os.environ.get("FINXCLOUD_JWT_EXPIRY_HOURS", "24"))
+
+__all__ = [
+    "authenticate",
+    "require_auth",
+    "create_token",
+    "decode_token",
+    "verify_password",
+    "hash_password_for_static",
+    "is_using_default_credentials",
+]
+
+
+def is_using_default_credentials() -> bool:
+    """Return True when both ADMIN_USERNAME and ADMIN_PASSWORD are 'admin'."""
+    return ADMIN_USERNAME == "admin" and ADMIN_PASSWORD == "admin"
+
+
+def check_default_credentials_startup() -> None:
+    """Log a warning at startup if default credentials are still in use."""
+    if is_using_default_credentials():
+        logger.warning(
+            "Default admin credentials detected. "
+            "Set FINXCLOUD_ADMIN_USER and FINXCLOUD_ADMIN_PASS environment "
+            "variables before running in production."
+        )
+
+
+# Run credential check at module load
+check_default_credentials_startup()
 
 
 def verify_password(plain: str, expected: str) -> bool:
@@ -47,7 +85,13 @@ def decode_token(token: str) -> Optional[dict]:
 
 
 def authenticate(username: str, password: str) -> Optional[str]:
-    """Validate credentials and return a JWT token, or None on failure."""
+    """Validate credentials and return a JWT token, or None on failure.
+
+    Returns None when default credentials are still active, forcing the
+    operator to configure custom credentials via environment variables.
+    """
+    if is_using_default_credentials():
+        return None
     if username == ADMIN_USERNAME and verify_password(password, ADMIN_PASSWORD):
         return create_token(username)
     return None

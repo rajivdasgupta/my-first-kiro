@@ -81,10 +81,21 @@ def deploy_to_s3(
     report_data: dict,
     prefix: str = "",
     deploy_password: str | None = None,
+    public: bool = False,
 ) -> str:
     """Deploy the dashboard to an S3 bucket with static website hosting.
 
-    Returns the public website URL.
+    Args:
+        session: Authenticated boto3 session.
+        bucket: Target S3 bucket name.
+        report_data: Report data to embed in the dashboard.
+        prefix: Optional S3 key prefix.
+        deploy_password: Optional client-side password gate.
+        public: If True, make the bucket publicly accessible (logs a warning).
+            Defaults to False (private deployment).
+
+    Returns:
+        The dashboard URL (S3 console URL when private, website URL when public).
     """
     s3 = session.client("s3")
     region = session.region_name or "us-east-1"
@@ -111,36 +122,43 @@ def deploy_to_s3(
         },
     )
 
-    # Set public access policy
-    policy = json.dumps({
-        "Version": "2012-10-17",
-        "Statement": [{
-            "Sid": "PublicReadGetObject",
-            "Effect": "Allow",
-            "Principal": "*",
-            "Action": "s3:GetObject",
-            "Resource": f"arn:aws:s3:::{bucket}/*",
-        }],
-    })
-
-    # Disable block public access
-    try:
-        s3.put_public_access_block(
-            Bucket=bucket,
-            PublicAccessBlockConfiguration={
-                "BlockPublicAcls": False,
-                "IgnorePublicAcls": False,
-                "BlockPublicPolicy": False,
-                "RestrictPublicBuckets": False,
-            },
+    if public:
+        log.warning(
+            "Deploying bucket %s with PUBLIC access. "
+            "The dashboard will be accessible to anyone with the URL.",
+            bucket,
         )
-    except ClientError as e:
-        log.warning("Could not update public access block: %s", e)
 
-    try:
-        s3.put_bucket_policy(Bucket=bucket, Policy=policy)
-    except ClientError as e:
-        log.warning("Could not set bucket policy: %s", e)
+        # Set public access policy
+        policy = json.dumps({
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Sid": "PublicReadGetObject",
+                "Effect": "Allow",
+                "Principal": "*",
+                "Action": "s3:GetObject",
+                "Resource": f"arn:aws:s3:::{bucket}/*",
+            }],
+        })
+
+        # Disable block public access
+        try:
+            s3.put_public_access_block(
+                Bucket=bucket,
+                PublicAccessBlockConfiguration={
+                    "BlockPublicAcls": False,
+                    "IgnorePublicAcls": False,
+                    "BlockPublicPolicy": False,
+                    "RestrictPublicBuckets": False,
+                },
+            )
+        except ClientError as e:
+            log.warning("Could not update public access block: %s", e)
+
+        try:
+            s3.put_bucket_policy(Bucket=bucket, Policy=policy)
+        except ClientError as e:
+            log.warning("Could not set bucket policy: %s", e)
 
     # Build self-contained HTML
     html = build_static_dashboard(report_data, deploy_password=deploy_password)
@@ -168,13 +186,16 @@ def deploy_to_s3(
                 ContentType="application/json",
             )
 
-    # Build the public URL
-    if region == "us-east-1":
-        url = f"http://{bucket}.s3-website-{region}.amazonaws.com"
+    if public:
+        # Build the public website URL
+        if region == "us-east-1":
+            url = f"http://{bucket}.s3-website-{region}.amazonaws.com"
+        else:
+            url = f"http://{bucket}.s3-website.{region}.amazonaws.com"
+        if key_prefix:
+            url = f"{url}/{key_prefix}"
     else:
-        url = f"http://{bucket}.s3-website.{region}.amazonaws.com"
-
-    if key_prefix:
-        url = f"{url}/{key_prefix}"
+        # Return S3 console URL for private deployments
+        url = f"https://s3.console.aws.amazon.com/s3/buckets/{bucket}"
 
     return url

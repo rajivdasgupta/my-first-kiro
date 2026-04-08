@@ -201,4 +201,4 @@ finxcloud/
 
 ## License
 
-Proprietary — AICloud Strategist
+Proprietary — AICloud Strategist. See [LICENSE](LICENSE) for details.

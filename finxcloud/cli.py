@@ -7,6 +7,7 @@ import logging
 import sys
 from pathlib import Path
 
+import boto3
 import click
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -28,6 +29,7 @@ from finxcloud.analyzer.utilization import UtilizationAnalyzer
 from finxcloud.analyzer.recommendations import RecommendationEngine
 from finxcloud.reporter.detailed import DetailedReporter
 from finxcloud.reporter.summary import SummaryReporter
+from finxcloud.utils.cost import merge_cost_data
 from finxcloud.reporter.roadmap import RoadmapReporter
 from finxcloud.output.json_writer import JSONWriter
 from finxcloud.output.html_writer import HTMLWriter
@@ -45,6 +47,8 @@ import finxcloud.providers.gcp  # noqa: F401
 
 console = Console()
 log = logging.getLogger("finxcloud")
+
+__all__ = ["main"]
 
 
 @click.group()
@@ -219,7 +223,7 @@ def scan_cloud(
                 }
 
     # Merge cost data
-    merged_cost_data = _merge_cost_data(all_cost_data)
+    merged_cost_data = merge_cost_data(all_cost_data)
 
     # Recommendations (no utilization for non-AWS providers yet)
     with console.status("[bold green]Generating recommendations..."):
@@ -377,23 +381,7 @@ def scan(
             ("OpenSearch", OpenSearchScanner(acct_session, region_list)),
         ]
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            for name, scanner in scanners:
-                task = progress.add_task(f"Scanning {name}...", total=None)
-                try:
-                    resources = scanner.scan()
-                    for r in resources:
-                        r["account_id"] = account_id
-                    all_resources.extend(resources)
-                    progress.update(task, description=f"[green]✓ {name}: {len(resources)} resources")
-                except Exception as e:
-                    progress.update(task, description=f"[red]✗ {name}: {e}")
-                    log.error("Scanner %s failed for account %s: %s", name, account_id, e)
-                progress.update(task, completed=True)
+        all_resources.extend(_run_resource_scanners(scanners, account_id, console))
 
         # Cost Explorer
         with console.status(f"[bold green]Pulling Cost Explorer data for {account_id}..."):
@@ -415,9 +403,65 @@ def scan(
                 }
 
     # Merge cost data for reporting
-    merged_cost_data = _merge_cost_data(all_cost_data)
+    merged_cost_data = merge_cost_data(all_cost_data)
 
-    # Cost Intelligence features
+    # Cost Intelligence & utilization
+    cost_intel = _run_cost_analysis(
+        session, accounts_to_scan, days, skip_utilization, allocation_tags, console,
+    )
+
+    # Generate reports and write output
+    _generate_and_write_reports(
+        all_resources=all_resources,
+        merged_cost_data=merged_cost_data,
+        utilization_analyzer=cost_intel["utilization_analyzer"],
+        recommendations=None,
+        output_dir=output_dir,
+        output_pdf=output_pdf,
+        output_s3_bucket=output_s3_bucket,
+        output_s3_prefix=output_s3_prefix,
+        session=session,
+        tag_allocation_data=cost_intel["tag_allocation_data"],
+        console=console,
+    )
+
+
+def _run_resource_scanners(
+    scanners: list[tuple[str, object]],
+    account_id: str,
+    console: Console,
+) -> list[dict]:
+    """Run all resource scanners for an account and return discovered resources."""
+    resources: list[dict] = []
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        for name, scanner in scanners:
+            task = progress.add_task(f"Scanning {name}...", total=None)
+            try:
+                found = scanner.scan()
+                for r in found:
+                    r["account_id"] = account_id
+                resources.extend(found)
+                progress.update(task, description=f"[green]✓ {name}: {len(found)} resources")
+            except Exception as e:
+                progress.update(task, description=f"[red]✗ {name}: {e}")
+                log.error("Scanner %s failed for account %s: %s", name, account_id, e)
+            progress.update(task, completed=True)
+    return resources
+
+
+def _run_cost_analysis(
+    session: boto3.Session,
+    accounts_to_scan: list[tuple[str, boto3.Session]],
+    days: int,
+    skip_utilization: bool,
+    allocation_tags: str | None,
+    console: Console,
+) -> dict:
+    """Run cost intelligence analysis (anomalies, budgets, trends, commitments, tags, utilization)."""
     console.print("\n[bold]Running cost intelligence analysis...[/bold]")
     ce_primary = CostExplorerAnalyzer(session)
 
@@ -429,7 +473,7 @@ def scan(
             if anomaly_count:
                 console.print(f"  [yellow]! {anomaly_count} cost anomalies detected[/yellow]")
             else:
-                console.print(f"  [green]No cost anomalies detected[/green]")
+                console.print("  [green]No cost anomalies detected[/green]")
         except Exception as e:
             console.print(f"  [yellow]Anomaly detection unavailable: {e}[/yellow]")
 
@@ -463,7 +507,6 @@ def scan(
         except Exception as e:
             console.print(f"  [yellow]Commitment analysis unavailable: {e}[/yellow]")
 
-    # Tag-based cost allocation
     tag_allocation_data = None
     if allocation_tags:
         tag_list = [t.strip() for t in allocation_tags.split(",") if t.strip()]
@@ -480,19 +523,36 @@ def scan(
                 except Exception as e:
                     console.print(f"  [yellow]Tag allocation unavailable: {e}[/yellow]")
 
-    # Utilization analysis
     utilization_analyzer = None
     if not skip_utilization:
         console.print("\n[bold]Collecting utilization metrics...[/bold]")
         utilization_analyzer = UtilizationAnalyzer(session)
 
-    # Recommendations
+    return {
+        "utilization_analyzer": utilization_analyzer,
+        "tag_allocation_data": tag_allocation_data,
+    }
+
+
+def _generate_and_write_reports(
+    all_resources: list[dict],
+    merged_cost_data: dict,
+    utilization_analyzer: UtilizationAnalyzer | None,
+    recommendations: list[dict] | None,
+    output_dir: str,
+    output_pdf: bool,
+    output_s3_bucket: str | None,
+    output_s3_prefix: str,
+    session: boto3.Session,
+    tag_allocation_data: dict | None,
+    console: Console,
+) -> None:
+    """Generate recommendations, build reports, write output files, and print summary."""
     with console.status("[bold green]Generating recommendations..."):
         engine = RecommendationEngine(all_resources, merged_cost_data, utilization_analyzer)
         recommendations = engine.generate_recommendations()
         console.print(f"  ✓ Generated [bold]{len(recommendations)}[/bold] recommendations")
 
-    # Reports
     with console.status("[bold green]Building reports..."):
         detailed_reporter = DetailedReporter(all_resources, merged_cost_data)
         detailed_report = detailed_reporter.generate()
@@ -503,7 +563,6 @@ def scan(
         roadmap_reporter = RoadmapReporter(recommendations)
         roadmap_report = roadmap_reporter.generate()
 
-    # Write output
     with console.status("[bold green]Writing reports..."):
         json_writer = JSONWriter(output_dir)
         json_files = json_writer.write_all(detailed_report, summary_report, roadmap_report)
@@ -511,7 +570,6 @@ def scan(
         html_writer = HTMLWriter(output_dir)
         html_file = html_writer.write(summary_report, detailed_report, roadmap_report)
 
-    # PDF export
     pdf_file = None
     if output_pdf:
         with console.status("[bold green]Generating PDF report..."):
@@ -527,81 +585,32 @@ def scan(
             except Exception as e:
                 console.print(f"  [yellow]PDF generation failed: {e}[/yellow]")
 
-    # Upload to S3 if configured
     s3_keys: list[str] = []
     if output_s3_bucket:
         with console.status("[bold green]Uploading reports to S3..."):
             s3w = S3Writer(session, output_s3_bucket, output_s3_prefix)
-            # Read the rendered HTML from disk to upload
             with open(html_file, "r", encoding="utf-8") as fh:
                 html_content = fh.read()
             s3_keys = s3w.write_all(detailed_report, summary_report, roadmap_report, html_content)
             console.print(f"  ✓ Uploaded [bold]{len(s3_keys)}[/bold] reports to s3://{output_s3_bucket}")
 
-    # Print summary
     console.print("\n" + "=" * 60)
     console.print("[bold blue]FinXCloud Scan Complete[/bold blue]")
     console.print("=" * 60)
 
     _print_summary_table(summary_report)
 
-    console.print(f"\n[bold]Reports written to:[/bold]")
+    console.print("\n[bold]Reports written to:[/bold]")
     for f in json_files:
         console.print(f"  📄 {f}")
     console.print(f"  🌐 {html_file}")
     if pdf_file:
         console.print(f"  📊 {pdf_file}")
     if s3_keys:
-        console.print(f"\n[bold]Reports uploaded to S3:[/bold]")
+        console.print("\n[bold]Reports uploaded to S3:[/bold]")
         for key in s3_keys:
             console.print(f"  ☁️  s3://{output_s3_bucket}/{key}")
     console.print()
-
-
-def _merge_cost_data(cost_data_by_account: dict) -> dict:
-    """Merge cost data from multiple accounts into a single dict."""
-    if len(cost_data_by_account) == 1:
-        return next(iter(cost_data_by_account.values()))
-
-    merged = {
-        "by_service": [],
-        "by_region": [],
-        "by_account": [],
-        "daily_trend": [],
-        "total_cost_30d": 0.0,
-    }
-    service_totals: dict[str, float] = {}
-    region_totals: dict[str, float] = {}
-    daily_totals: dict[str, float] = {}
-
-    for account_id, data in cost_data_by_account.items():
-        merged["total_cost_30d"] += data.get("total_cost_30d", 0.0)
-        merged["by_account"].append({
-            "account": account_id,
-            "amount": data.get("total_cost_30d", 0.0),
-            "unit": "USD",
-            "currency": "USD",
-        })
-        for entry in data.get("by_service", []):
-            service_totals[entry["service"]] = service_totals.get(entry["service"], 0) + float(entry["amount"])
-        for entry in data.get("by_region", []):
-            region_totals[entry.get("region", "unknown")] = region_totals.get(entry.get("region", "unknown"), 0) + float(entry["amount"])
-        for entry in data.get("daily_trend", []):
-            daily_totals[entry["date"]] = daily_totals.get(entry["date"], 0) + float(entry["amount"])
-
-    merged["by_service"] = [
-        {"service": k, "amount": v, "unit": "USD", "currency": "USD"}
-        for k, v in sorted(service_totals.items(), key=lambda x: x[1], reverse=True)
-    ]
-    merged["by_region"] = [
-        {"region": k, "amount": v, "unit": "USD", "currency": "USD"}
-        for k, v in sorted(region_totals.items(), key=lambda x: x[1], reverse=True)
-    ]
-    merged["daily_trend"] = [
-        {"date": k, "amount": v}
-        for k, v in sorted(daily_totals.items())
-    ]
-    return merged
 
 
 def _print_summary_table(summary: dict) -> None:
@@ -641,10 +650,6 @@ def _print_summary_table(summary: dict) -> None:
             )
 
         console.print(rec_table)
-
-
-# Need to import boto3 for type hint in accounts_to_scan
-import boto3  # noqa: E402
 
 
 @main.command("export-pdf")
@@ -715,6 +720,7 @@ def web(host: str, port: int, do_reload: bool) -> None:
 @click.option("--skip-utilization", is_flag=True, help="Skip CloudWatch utilization checks.")
 @click.option("--from-reports", is_flag=True, help="Use existing local reports instead of running a new scan.")
 @click.option("--deploy-password", default=None, help="Password to protect the static dashboard (client-side gate).")
+@click.option("--public", is_flag=True, default=False, help="Make the S3 bucket publicly accessible (default: private).")
 def deploy(
     access_key: str,
     secret_key: str,
@@ -727,6 +733,7 @@ def deploy(
     skip_utilization: bool,
     from_reports: bool,
     deploy_password: str | None,
+    public: bool,
 ) -> None:
     """Deploy the FinXCloud dashboard to S3 with a public URL.
 
@@ -832,7 +839,7 @@ def deploy(
 
     # Deploy to S3
     with console.status(f"[bold green]Deploying to S3 bucket '{bucket}'..."):
-        url = deploy_to_s3(session, bucket, report_data, prefix, deploy_password=deploy_password)
+        url = deploy_to_s3(session, bucket, report_data, prefix, deploy_password=deploy_password, public=public)
 
     console.print(f"\n  ✓ Dashboard deployed successfully!")
     console.print(f"\n  [bold green]🌐 Public URL: {url}[/bold green]\n")
