@@ -366,15 +366,8 @@ async def get_scan_results(scan_id: str, _user: dict = Depends(require_auth)):
 @app.get("/api/scan/{scan_id}/pdf")
 async def download_scan_pdf(scan_id: str, _user: dict = Depends(require_auth)):
     """Generate and return a PDF report for a completed scan."""
-    scan = _scans.get(scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
-    if scan["status"] == "running":
-        raise HTTPException(status_code=202, detail="Scan still running")
-    if scan["status"] == "failed":
-        raise HTTPException(status_code=500, detail=scan["error"])
+    result = _get_completed_scan_result(scan_id)
 
-    result = scan["result"]
     try:
         from finxcloud.output.pdf_writer import PDFWriter
         writer = PDFWriter()
@@ -396,6 +389,41 @@ async def download_scan_pdf(scan_id: str, _user: dict = Depends(require_auth)):
         media_type="application/pdf",
         headers={"Content-Disposition": "attachment; filename=finxcloud_report.pdf"},
     )
+
+
+@app.get("/api/scan/{scan_id}/csv")
+async def download_scan_csv(scan_id: str, _user: dict = Depends(require_auth)):
+    """Generate and return a CSV findings report for a completed scan."""
+    result = _get_completed_scan_result(scan_id)
+
+    from finxcloud.output.csv_writer import CSVWriter
+    recs = result.get("recommendations", [])
+    csv_bytes = CSVWriter.build_findings_bytes(recs)
+
+    from fastapi.responses import Response
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=finxcloud_findings.csv"},
+    )
+
+
+def _get_completed_scan_result(scan_id: str) -> dict:
+    """Get scan result from in-memory cache or persistent storage. Raises HTTPException if not found."""
+    scan = _scans.get(scan_id)
+    if scan:
+        if scan["status"] == "running":
+            raise HTTPException(status_code=202, detail="Scan still running")
+        if scan["status"] == "failed":
+            raise HTTPException(status_code=500, detail=scan["error"])
+        if scan["result"]:
+            return scan["result"]
+
+    persisted = _lookup_persisted_scan(scan_id)
+    if persisted and persisted.get("result"):
+        return persisted["result"]
+
+    raise HTTPException(status_code=404, detail="Scan not found")
 
 
 def _make_json_safe(obj):

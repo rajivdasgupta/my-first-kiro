@@ -614,6 +614,7 @@
       <div style="display:flex;gap:0.75rem;margin-bottom:1rem;flex-wrap:wrap;">
         <button class="btn btn-green btn-sm" onclick="openEmailModal()">Send Report</button>
         <button class="btn btn-primary btn-sm" onclick="downloadPDF()">Download PDF</button>
+        <button class="btn btn-outline btn-sm" onclick="downloadCSV()">Download CSV</button>
         <button class="btn btn-outline btn-sm" onclick="switchTab('scan')">New Scan</button>
       </div>
 
@@ -1414,7 +1415,7 @@ function renderTagAllocation(tagData) {
 }
 
 async function downloadPDF() {
-  if (!currentScanId) { alert('No scan results available.'); return; }
+  if (!currentScanId) { alert('No scan results available. Run a scan first.'); return; }
   try {
     const res = await fetch(`/api/scan/${currentScanId}/pdf`);
     if (!res.ok) {
@@ -1432,6 +1433,28 @@ async function downloadPDF() {
     URL.revokeObjectURL(url);
   } catch (err) {
     alert('PDF download failed: ' + err.message);
+  }
+}
+
+async function downloadCSV() {
+  if (!currentScanId) { alert('No scan results available. Run a scan first.'); return; }
+  try {
+    const res = await fetch(`/api/scan/${currentScanId}/csv`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to generate CSV');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'finxcloud_findings.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert('CSV download failed: ' + err.message);
   }
 }
 
