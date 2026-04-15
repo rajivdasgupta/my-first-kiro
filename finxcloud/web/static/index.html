@@ -450,6 +450,7 @@
     <button class="nav-tab" data-tab="scan">New Scan</button>
     <button class="nav-tab" data-tab="results" id="resultsTab" style="display:none;">Dashboard</button>
     <button class="nav-tab" data-tab="budgets">Budgets</button>
+    <button class="nav-tab" data-tab="iac-estimator">IaC Estimator</button>
     <button class="nav-tab" data-tab="schedules">Schedules</button>
     <button class="nav-tab" data-tab="notifications">Notifications</button>
     <button class="nav-tab" data-tab="settings" id="settingsTab" style="display:none;">Settings</button>
@@ -617,6 +618,7 @@
         <button class="btn btn-green btn-sm" onclick="openEmailModal()">Send Report</button>
         <button class="btn btn-primary btn-sm" onclick="downloadPDF()">Download PDF</button>
         <button class="btn btn-outline btn-sm" onclick="downloadCSV()">Download CSV</button>
+        <button class="btn btn-outline btn-sm" onclick="generateChargeback()">Chargeback Report</button>
         <button class="btn btn-outline btn-sm" onclick="switchTab('scan')">New Scan</button>
       </div>
 
@@ -703,6 +705,30 @@
       <div class="table-panel" id="tagAllocationPanel" style="display:none;">
         <h3>Cost Allocation by Tags</h3>
         <div id="tagAllocationContent"></div>
+      </div>
+
+      <!-- AI/GPU Costs -->
+      <div class="table-panel" id="aiCostsPanel" style="display:none;">
+        <h3>AI/ML Service Costs</h3>
+        <table>
+          <thead>
+            <tr><th>Service</th><th>Cost (30d)</th></tr>
+          </thead>
+          <tbody id="aiCostsBody"></tbody>
+        </table>
+        <div style="padding:0.75rem 1rem;font-size:0.9rem;font-weight:600;" id="aiCostsTotal"></div>
+      </div>
+
+      <!-- Chargeback Report -->
+      <div class="table-panel" id="chargebackPanel" style="display:none;">
+        <h3>Chargeback / Showback Report</h3>
+        <table>
+          <thead>
+            <tr><th>Team / Service</th><th>Total Cost</th><th>Details</th></tr>
+          </thead>
+          <tbody id="chargebackBody"></tbody>
+        </table>
+        <div style="padding:0.75rem 1rem;font-size:0.85rem;color:var(--gray-500);" id="chargebackMeta"></div>
       </div>
 
       <!-- Recommendations -->
@@ -805,6 +831,97 @@
       </div>
       <div id="budgetList">
         <p style="color:var(--gray-500);text-align:center;padding:2rem;">Loading budgets...</p>
+      </div>
+    </div>
+
+    <!-- SaaS Costs -->
+    <div class="scan-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+        <h2 style="font-size:1.1rem;color:var(--gray-700);">SaaS Spend Tracking</h2>
+      </div>
+      <p style="color:var(--gray-500);font-size:0.85rem;margin-bottom:1rem;">
+        Track SaaS and third-party tool costs alongside your cloud spend.
+      </p>
+      <div style="background:#fff;border-radius:var(--radius);padding:1rem;margin-bottom:1rem;">
+        <div class="form-grid" style="grid-template-columns:1fr 1fr 1fr auto;align-items:end;">
+          <div class="form-group">
+            <label for="saasName">Service Name</label>
+            <input type="text" id="saasName" placeholder="e.g. Datadog" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+          </div>
+          <div class="form-group">
+            <label for="saasCost">Monthly Cost (USD)</label>
+            <input type="number" id="saasCost" min="0" step="0.01" placeholder="e.g. 500" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+          </div>
+          <div class="form-group">
+            <label for="saasCategory">Category</label>
+            <select id="saasCategory" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+              <option value="SaaS">SaaS</option>
+              <option value="Monitoring">Monitoring</option>
+              <option value="Security">Security</option>
+              <option value="DevOps">DevOps</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <button type="button" class="btn btn-primary btn-sm" onclick="addSaaSCost()" style="margin-bottom:0.25rem;">Add</button>
+        </div>
+      </div>
+      <div id="saasCostList">
+        <p style="color:var(--gray-500);text-align:center;padding:2rem;">Loading SaaS costs...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab: IaC Cost Estimator -->
+  <div class="tab-content" id="tab-iac-estimator">
+    <div class="scan-panel">
+      <h2 style="font-size:1.1rem;color:var(--gray-700);margin-bottom:1rem;">Infrastructure Cost Estimator</h2>
+      <p style="color:var(--gray-500);font-size:0.85rem;margin-bottom:1rem;">
+        Estimate monthly costs for planned infrastructure resources (EC2, RDS, EBS, etc.).
+      </p>
+      <div id="iacResources">
+        <div class="iac-row" style="display:grid;grid-template-columns:1fr 1fr 80px 80px auto;gap:0.5rem;align-items:end;margin-bottom:0.5rem;">
+          <div class="form-group">
+            <label>Resource Type</label>
+            <select class="iac-type" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+              <option value="aws_instance">EC2 Instance</option>
+              <option value="aws_db_instance">RDS Instance</option>
+              <option value="aws_ebs_volume">EBS Volume</option>
+              <option value="aws_nat_gateway">NAT Gateway</option>
+              <option value="aws_lb">Load Balancer</option>
+              <option value="aws_elasticache_cluster">ElastiCache</option>
+              <option value="aws_opensearch_domain">OpenSearch</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Instance/Size Type</label>
+            <input type="text" class="iac-instance-type" placeholder="e.g. t3.medium" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+          </div>
+          <div class="form-group">
+            <label>Count</label>
+            <input type="number" class="iac-count" value="1" min="1" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+          </div>
+          <div class="form-group">
+            <label>Size GB</label>
+            <input type="number" class="iac-size" value="0" min="0" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+          </div>
+          <button type="button" class="btn btn-danger btn-sm" onclick="removeIaCRow(this)" style="margin-bottom:0.25rem;">✕</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:0.5rem;margin-top:0.75rem;">
+        <button type="button" class="btn btn-outline btn-sm" onclick="addIaCRow()">+ Add Resource</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="estimateIaCCost()">Estimate Cost</button>
+      </div>
+      <div id="iacResult" style="display:none;margin-top:1rem;">
+        <div class="table-panel">
+          <h3>Cost Estimate</h3>
+          <table>
+            <thead>
+              <tr><th>Resource Type</th><th>Instance Type</th><th>Count</th><th>Monthly Cost</th><th>Note</th></tr>
+            </thead>
+            <tbody id="iacResultBody"></tbody>
+          </table>
+          <div style="padding:0.75rem 1rem;font-size:1rem;font-weight:700;color:var(--primary);" id="iacTotalCost"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -1549,6 +1666,9 @@ function renderDashboard(data) {
   // Tag-based cost allocation
   renderTagAllocation(data.tag_allocation);
 
+  // AI/ML costs
+  renderAICosts(data);
+
   // Resource details
   renderResourceDetails(data.resources || []);
 
@@ -2182,7 +2302,7 @@ switchTab = function(tabName) {
   origSwitchTab(tabName);
   if (tabName === 'schedules') loadSchedules();
   if (tabName === 'notifications') { loadWebhooks(); loadAlerts(); loadReportSchedules(); }
-  if (tabName === 'budgets') { loadBudgets(); populateBudgetAccountSelect(); }
+  if (tabName === 'budgets') { loadBudgets(); populateBudgetAccountSelect(); loadSaaSCosts(); }
   if (tabName === 'settings') { loadUsers(); }
 };
 
@@ -2390,6 +2510,200 @@ async function deleteUserUI(username) {
     await fetch(`/api/users/${encodeURIComponent(username)}`, { method: 'DELETE' });
     loadUsers();
   } catch {}
+}
+
+// ===================================================================
+// AI/ML COSTS (rendered from scan data)
+// ===================================================================
+function renderAICosts(data) {
+  const costData = data.cost_data || {};
+  const byService = costData.by_service || [];
+  const aiServices = byService.filter(s => {
+    const name = (s.service || '').toLowerCase();
+    return name.includes('sagemaker') || name.includes('bedrock') ||
+           name.includes('comprehend') || name.includes('rekognition') ||
+           name.includes('textract') || name.includes('polly') ||
+           name.includes('transcribe') || name.includes('translate') ||
+           name.includes('lex') || name.includes('personalize') ||
+           name.includes('forecast') || name.includes('kendra');
+  });
+
+  const panel = document.getElementById('aiCostsPanel');
+  if (!aiServices.length) { panel.style.display = 'none'; return; }
+
+  panel.style.display = '';
+  const body = document.getElementById('aiCostsBody');
+  body.innerHTML = '';
+  let total = 0;
+  aiServices.forEach(s => {
+    total += s.amount;
+    body.innerHTML += `<tr><td>${esc(s.service)}</td><td class="amount-cost">$${s.amount.toFixed(2)}</td></tr>`;
+  });
+  document.getElementById('aiCostsTotal').textContent = `Total AI/ML Cost: $${total.toFixed(2)}`;
+}
+
+// ===================================================================
+// SAAS COST TRACKING
+// ===================================================================
+async function loadSaaSCosts() {
+  try {
+    const res = await fetch('/api/saas-costs');
+    if (!res.ok) return;
+    const data = await res.json();
+    renderSaaSCostList(data.costs || [], data.total_monthly || 0);
+  } catch {}
+}
+
+function renderSaaSCostList(costs, total) {
+  const el = document.getElementById('saasCostList');
+  if (!costs.length) {
+    el.innerHTML = '<p style="color:var(--gray-500);text-align:center;padding:2rem;">No SaaS costs tracked yet.</p>';
+    return;
+  }
+  let html = `<div style="margin-bottom:0.5rem;font-weight:600;color:var(--primary);">Total Monthly SaaS Spend: $${total.toFixed(2)}</div>`;
+  html += '<table><thead><tr><th>Service</th><th>Category</th><th>Monthly Cost</th><th>Added</th><th>Actions</th></tr></thead><tbody>';
+  for (const c of costs) {
+    html += `<tr>
+      <td>${esc(c.name)}</td>
+      <td><span class="badge badge-medium">${esc(c.category)}</span></td>
+      <td class="amount-cost">$${parseFloat(c.monthly_cost).toFixed(2)}</td>
+      <td style="font-size:0.85rem;">${c.created_at ? new Date(c.created_at).toLocaleDateString() : '--'}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="deleteSaaSCost('${c.id}')">Delete</button></td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+async function addSaaSCost() {
+  const name = document.getElementById('saasName').value.trim();
+  const cost = parseFloat(document.getElementById('saasCost').value);
+  const category = document.getElementById('saasCategory').value;
+  if (!name) { alert('Please enter a service name.'); return; }
+  if (isNaN(cost) || cost <= 0) { alert('Please enter a valid monthly cost.'); return; }
+  try {
+    const res = await fetch('/api/saas-costs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, monthly_cost: cost, category }),
+    });
+    if (res.ok) {
+      document.getElementById('saasName').value = '';
+      document.getElementById('saasCost').value = '';
+      loadSaaSCosts();
+    } else {
+      const err = await res.json();
+      alert('Failed: ' + (err.detail || 'Unknown error'));
+    }
+  } catch (e) { alert('Failed: ' + e.message); }
+}
+
+async function deleteSaaSCost(id) {
+  if (!confirm('Delete this SaaS cost entry?')) return;
+  try {
+    await fetch(`/api/saas-costs/${id}`, { method: 'DELETE' });
+    loadSaaSCosts();
+  } catch {}
+}
+
+// ===================================================================
+// CHARGEBACK REPORT
+// ===================================================================
+async function generateChargeback() {
+  if (!currentScanId) { alert('No scan results available. Run a scan first.'); return; }
+  try {
+    const res = await fetch(`/api/chargeback?scan_id=${currentScanId}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to generate chargeback report');
+    }
+    const report = await res.json();
+    renderChargebackReport(report);
+  } catch (err) {
+    alert('Chargeback report failed: ' + err.message);
+  }
+}
+
+function renderChargebackReport(report) {
+  const panel = document.getElementById('chargebackPanel');
+  panel.style.display = '';
+  const body = document.getElementById('chargebackBody');
+  body.innerHTML = '';
+  (report.teams || []).forEach(team => {
+    const details = (team.services || []).map(s =>
+      s.service ? esc(s.service) : `${esc(s.tag_key || '')}=${esc(s.tag_value || '')}`
+    ).join(', ');
+    body.innerHTML += `<tr>
+      <td style="font-weight:600;">${esc(team.name)}</td>
+      <td class="amount-cost">$${team.total_cost.toFixed(2)}</td>
+      <td style="font-size:0.85rem;max-width:300px;">${details || '--'}</td>
+    </tr>`;
+  });
+  const meta = document.getElementById('chargebackMeta');
+  meta.textContent = `Total: $${(report.total || 0).toFixed(2)} | Unallocated: $${(report.unallocated || 0).toFixed(2)} | Method: ${report.allocation_method || 'services'}`;
+  panel.scrollIntoView({ behavior: 'smooth' });
+}
+
+// ===================================================================
+// IAC COST ESTIMATOR
+// ===================================================================
+function addIaCRow() {
+  const container = document.getElementById('iacResources');
+  const row = container.querySelector('.iac-row').cloneNode(true);
+  row.querySelector('.iac-instance-type').value = '';
+  row.querySelector('.iac-count').value = '1';
+  row.querySelector('.iac-size').value = '0';
+  container.appendChild(row);
+}
+
+function removeIaCRow(btn) {
+  const container = document.getElementById('iacResources');
+  if (container.querySelectorAll('.iac-row').length <= 1) return;
+  btn.closest('.iac-row').remove();
+}
+
+async function estimateIaCCost() {
+  const rows = document.querySelectorAll('#iacResources .iac-row');
+  const resources = [];
+  rows.forEach(row => {
+    resources.push({
+      type: row.querySelector('.iac-type').value,
+      instance_type: row.querySelector('.iac-instance-type').value || 'default',
+      count: parseInt(row.querySelector('.iac-count').value) || 1,
+      size_gb: parseFloat(row.querySelector('.iac-size').value) || 0,
+    });
+  });
+  try {
+    const res = await fetch('/api/estimate-cost', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resources }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Estimation failed');
+    }
+    const result = await res.json();
+    renderIaCResult(result);
+  } catch (err) {
+    alert('Cost estimation failed: ' + err.message);
+  }
+}
+
+function renderIaCResult(result) {
+  document.getElementById('iacResult').style.display = '';
+  const body = document.getElementById('iacResultBody');
+  body.innerHTML = '';
+  (result.resources || []).forEach(r => {
+    body.innerHTML += `<tr>
+      <td>${esc(r.type)}</td>
+      <td>${esc(r.instance_type)}</td>
+      <td>${r.count}</td>
+      <td class="amount-cost">$${r.monthly_cost.toFixed(2)}</td>
+      <td style="font-size:0.85rem;color:var(--gray-500);">${esc(r.pricing_note)}</td>
+    </tr>`;
+  });
+  document.getElementById('iacTotalCost').textContent = `Estimated Total: $${(result.total_monthly || 0).toFixed(2)}/month`;
 }
 </script>
 

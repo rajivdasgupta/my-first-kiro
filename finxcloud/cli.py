@@ -21,6 +21,7 @@ from finxcloud.scanner.s3 import S3Scanner
 from finxcloud.scanner.lambda_ import LambdaScanner
 from finxcloud.scanner.networking import NetworkingScanner
 from finxcloud.scanner.opensearch import OpenSearchScanner
+from finxcloud.scanner.kubernetes import KubernetesScanner
 from finxcloud.analyzer.anomaly import AnomalyDetector
 from finxcloud.analyzer.budget import BudgetTracker
 from finxcloud.analyzer.commitments import CommitmentsAnalyzer
@@ -379,6 +380,7 @@ def scan(
             ("Lambda", LambdaScanner(acct_session, region_list)),
             ("Networking", NetworkingScanner(acct_session, region_list)),
             ("OpenSearch", OpenSearchScanner(acct_session, region_list)),
+            ("EKS/Kubernetes", KubernetesScanner(acct_session, region_list)),
         ]
 
         all_resources.extend(_run_resource_scanners(scanners, account_id, console))

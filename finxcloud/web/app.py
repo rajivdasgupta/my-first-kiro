@@ -46,6 +46,7 @@ from finxcloud.scanner.s3 import S3Scanner
 from finxcloud.scanner.lambda_ import LambdaScanner
 from finxcloud.scanner.networking import NetworkingScanner
 from finxcloud.scanner.opensearch import OpenSearchScanner
+from finxcloud.scanner.kubernetes import KubernetesScanner
 from finxcloud.analyzer.anomaly import AnomalyDetector
 from finxcloud.analyzer.budget import BudgetTracker
 from finxcloud.analyzer.commitments import CommitmentsAnalyzer
@@ -650,6 +651,7 @@ def _run_aws_scan(scan_id: str, req: ScanRequest, scan: dict) -> None:
             ("Lambda", LambdaScanner(acct_session, region_list)),
             ("Networking", NetworkingScanner(acct_session, region_list)),
             ("OpenSearch", OpenSearchScanner(acct_session, region_list)),
+            ("EKS/Kubernetes", KubernetesScanner(acct_session, region_list)),
         ]
 
         for name, scanner in scanners:
@@ -1316,4 +1318,79 @@ async def slack_events(request: Request):
         raise HTTPException(status_code=401, detail="Invalid Slack signature")
 
     result = bot.handle_event(payload)
+    return JSONResponse(content=result)
+
+
+# ---------------------------------------------------------------------------
+# SaaS Cost Tracking
+# ---------------------------------------------------------------------------
+
+
+class SaaSCostRequest(BaseModel):
+    name: str
+    monthly_cost: float
+    category: str = "SaaS"
+
+
+@app.get("/api/saas-costs")
+async def list_saas_costs(_user: dict = Depends(require_auth)):
+    from finxcloud.integrations.saas_tracker import SaaSTracker
+    tracker = SaaSTracker()
+    return JSONResponse(content={
+        "costs": tracker.list_saas_costs(),
+        "total_monthly": tracker.get_total_monthly(),
+    })
+
+
+@app.post("/api/saas-costs")
+async def add_saas_cost(req: SaaSCostRequest, _user: dict = Depends(require_auth)):
+    from finxcloud.integrations.saas_tracker import SaaSTracker
+    tracker = SaaSTracker()
+    entry = tracker.add_saas_cost(req.name, req.monthly_cost, req.category)
+    return JSONResponse(content=entry)
+
+
+@app.delete("/api/saas-costs/{cost_id}")
+async def delete_saas_cost(cost_id: str, _user: dict = Depends(require_auth)):
+    from finxcloud.integrations.saas_tracker import SaaSTracker
+    tracker = SaaSTracker()
+    if not tracker.delete_saas_cost(cost_id):
+        raise HTTPException(status_code=404, detail="SaaS cost entry not found")
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Chargeback / Showback Reports
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/chargeback")
+async def get_chargeback_report(
+    scan_id: str = Query(...),
+    _user: dict = Depends(require_auth),
+):
+    from finxcloud.reporter.chargeback import ChargebackReporter
+    scan_result = _get_completed_scan_result(scan_id)
+    reporter = ChargebackReporter()
+    report = reporter.generate(
+        cost_data=scan_result.get("cost_data", {}),
+        tag_allocation=scan_result.get("tag_allocation"),
+    )
+    return JSONResponse(content=report)
+
+
+# ---------------------------------------------------------------------------
+# IaC Cost Estimation
+# ---------------------------------------------------------------------------
+
+
+class IaCEstimateRequest(BaseModel):
+    resources: list[dict] = Field(..., description="List of resource definitions")
+
+
+@app.post("/api/estimate-cost")
+async def estimate_iac_cost(req: IaCEstimateRequest, _user: dict = Depends(require_auth)):
+    from finxcloud.analyzer.iac_estimator import IaCCostEstimator
+    estimator = IaCCostEstimator()
+    result = estimator.estimate_from_resources(req.resources)
     return JSONResponse(content=result)
