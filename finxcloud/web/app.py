@@ -18,7 +18,14 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, SecretStr
 
-from finxcloud.web.auth import authenticate, require_auth
+from finxcloud.web.auth import (
+    authenticate,
+    create_user,
+    delete_user,
+    list_users,
+    require_auth,
+    require_role,
+)
 from finxcloud.utils.cost import merge_cost_data
 from finxcloud.web.storage import (
     create_account,
@@ -170,7 +177,10 @@ async def login(req: LoginRequest):
     token = authenticate(req.username, req.password)
     if not token:
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    response = JSONResponse({"status": "ok", "username": req.username})
+    from finxcloud.web.auth import decode_token
+    payload = decode_token(token)
+    role = payload.get("role", "viewer") if payload else "viewer"
+    response = JSONResponse({"status": "ok", "username": req.username, "role": role})
     response.set_cookie(
         key="finxcloud_token",
         value=token,
@@ -190,7 +200,41 @@ async def logout():
 
 @app.get("/api/me")
 async def me(user: dict = Depends(require_auth)):
-    return {"username": user["sub"]}
+    return {"username": user["sub"], "role": user.get("role", "viewer")}
+
+
+# ---------------------------------------------------------------------------
+# User management (admin only)
+# ---------------------------------------------------------------------------
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+    role: str = "viewer"
+
+
+@app.get("/api/users")
+async def api_list_users(_user: dict = Depends(require_role("admin"))):
+    """List all users (admin only). Password hashes are excluded."""
+    return list_users()
+
+
+@app.post("/api/users")
+async def api_create_user(req: CreateUserRequest, _user: dict = Depends(require_role("admin"))):
+    """Create a new user (admin only)."""
+    try:
+        user = create_user(req.username, req.password, req.role)
+        return user
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/users/{username}")
+async def api_delete_user(username: str, _user: dict = Depends(require_role("admin"))):
+    """Delete a user (admin only)."""
+    if not delete_user(username):
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +247,7 @@ async def api_list_accounts(_user: dict = Depends(require_auth)):
 
 
 @app.post("/api/accounts")
-async def api_create_account(req: AccountRequest, _user: dict = Depends(require_auth)):
+async def api_create_account(req: AccountRequest, _user: dict = Depends(require_role("admin"))):
     provider_creds = {}
     if req.provider == "azure":
         provider_creds = {
@@ -250,7 +294,7 @@ async def api_get_account(account_id: str, _user: dict = Depends(require_auth)):
 
 
 @app.patch("/api/accounts/{account_id}")
-async def api_update_account(account_id: str, req: AccountUpdateRequest, _user: dict = Depends(require_auth)):
+async def api_update_account(account_id: str, req: AccountUpdateRequest, _user: dict = Depends(require_role("admin"))):
     fields = {}
     for k, v in req.model_dump(exclude_none=True).items():
         if isinstance(v, SecretStr):
@@ -266,7 +310,7 @@ async def api_update_account(account_id: str, req: AccountUpdateRequest, _user: 
 
 
 @app.delete("/api/accounts/{account_id}")
-async def api_delete_account(account_id: str, _user: dict = Depends(require_auth)):
+async def api_delete_account(account_id: str, _user: dict = Depends(require_role("admin"))):
     ok = delete_account(account_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -291,7 +335,7 @@ async def api_latest_scan(account_id: str, _user: dict = Depends(require_auth)):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/scan")
-async def start_scan(req: ScanRequest, _user: dict = Depends(require_auth)):
+async def start_scan(req: ScanRequest, _user: dict = Depends(require_role("admin"))):
     # If scanning from a stored account, load credentials
     if req.stored_account_id:
         acct = get_account(req.stored_account_id)

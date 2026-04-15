@@ -435,6 +435,7 @@
   <h1>FinXCloud Dashboard
     <span class="user-bar" id="userBar" style="display:none;">
       <span class="username" id="userDisplay"></span>
+      <span class="username" id="userRole" style="opacity:0.7;font-size:0.75rem;background:rgba(255,255,255,0.15);padding:0.15rem 0.5rem;border-radius:4px;"></span>
       <button class="btn-logout" id="logoutBtn">Logout</button>
     </span>
   </h1>
@@ -451,6 +452,7 @@
     <button class="nav-tab" data-tab="budgets">Budgets</button>
     <button class="nav-tab" data-tab="schedules">Schedules</button>
     <button class="nav-tab" data-tab="notifications">Notifications</button>
+    <button class="nav-tab" data-tab="settings" id="settingsTab" style="display:none;">Settings</button>
   </div>
 
   <!-- Tab: Accounts -->
@@ -1014,12 +1016,50 @@
   </div>
 </div>
 
+<!-- Tab: Settings (admin only) -->
+<div class="tab-content" id="tab-settings">
+  <div class="scan-panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+      <h2 style="font-size:1.1rem;color:var(--gray-700);">User Management</h2>
+    </div>
+    <p style="color:var(--gray-500);font-size:0.85rem;margin-bottom:1rem;">
+      Manage dashboard users and their roles. Roles: <strong>admin</strong> (full access),
+      <strong>analyst</strong> (read-only), <strong>viewer</strong> (dashboard only).
+    </p>
+    <div style="background:#fff;border-radius:var(--radius);padding:1rem;margin-bottom:1rem;">
+      <div class="form-grid" style="grid-template-columns:1fr 1fr 1fr auto;align-items:end;">
+        <div class="form-group">
+          <label for="newUsername">Username</label>
+          <input type="text" id="newUsername" placeholder="e.g. jdoe" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+        </div>
+        <div class="form-group">
+          <label for="newPassword">Password</label>
+          <input type="password" id="newPassword" placeholder="Password" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+        </div>
+        <div class="form-group">
+          <label for="newRole">Role</label>
+          <select id="newRole" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+            <option value="viewer">Viewer</option>
+            <option value="analyst">Analyst</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" onclick="addUser()" style="margin-bottom:0.25rem;">Add User</button>
+      </div>
+    </div>
+    <div id="userList">
+      <p style="color:var(--gray-500);text-align:center;padding:2rem;">Loading users...</p>
+    </div>
+  </div>
+</div>
+
 <script>
 // --- State ---
 let isAuthenticated = false;
 let currentScanId = null;
 let currentAccountId = null;
 let lastScanResult = null;
+let currentUserRole = null;
 
 // --- Auth ---
 async function checkAuth() {
@@ -1027,7 +1067,7 @@ async function checkAuth() {
     const res = await fetch('/api/me');
     if (res.ok) {
       const data = await res.json();
-      showApp(data.username);
+      showApp(data.username, data.role || 'viewer');
       return;
     }
   } catch {}
@@ -1036,15 +1076,21 @@ async function checkAuth() {
 
 function showLogin() {
   isAuthenticated = false;
+  currentUserRole = null;
   document.getElementById('loginOverlay').classList.remove('hidden');
   document.getElementById('userBar').style.display = 'none';
+  document.getElementById('settingsTab').style.display = 'none';
 }
 
-function showApp(username) {
+function showApp(username, role) {
   isAuthenticated = true;
+  currentUserRole = role || 'viewer';
   document.getElementById('loginOverlay').classList.add('hidden');
   document.getElementById('userBar').style.display = 'flex';
   document.getElementById('userDisplay').textContent = username;
+  document.getElementById('userRole').textContent = currentUserRole;
+  // Show Settings tab only for admins
+  document.getElementById('settingsTab').style.display = currentUserRole === 'admin' ? '' : 'none';
   loadAccounts();
 }
 
@@ -1067,7 +1113,7 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
     });
     if (res.ok) {
       const data = await res.json();
-      showApp(data.username);
+      showApp(data.username, data.role || 'viewer');
     } else {
       errorEl.classList.add('show');
     }
@@ -2137,6 +2183,7 @@ switchTab = function(tabName) {
   if (tabName === 'schedules') loadSchedules();
   if (tabName === 'notifications') { loadWebhooks(); loadAlerts(); loadReportSchedules(); }
   if (tabName === 'budgets') { loadBudgets(); populateBudgetAccountSelect(); }
+  if (tabName === 'settings') { loadUsers(); }
 };
 
 // ===================================================================
@@ -2275,6 +2322,73 @@ async function deleteReportSchedule(id) {
   try {
     await fetch(`/api/report-schedules/${id}`, { method: 'DELETE' });
     loadReportSchedules();
+  } catch {}
+}
+
+// ===================================================================
+// USER MANAGEMENT (admin only)
+// ===================================================================
+async function loadUsers() {
+  try {
+    const res = await fetch('/api/users');
+    if (!res.ok) return;
+    const users = await res.json();
+    renderUserList(users);
+  } catch {}
+}
+
+function renderUserList(users) {
+  const el = document.getElementById('userList');
+  if (!users.length) {
+    el.innerHTML = '<p style="color:var(--gray-500);text-align:center;padding:2rem;">No users in users.json. The env-var admin is used as fallback.</p>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Username</th><th>Role</th><th>Created</th><th>Actions</th></tr></thead><tbody>';
+  for (const u of users) {
+    const created = u.created_at ? new Date(u.created_at).toLocaleDateString() : '--';
+    const roleBadge = u.role === 'admin' ? 'badge-high' : u.role === 'analyst' ? 'badge-medium' : 'badge-low';
+    html += `<tr>
+      <td>${esc(u.username)}</td>
+      <td><span class="badge ${roleBadge}">${esc(u.role)}</span></td>
+      <td>${esc(created)}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="deleteUserUI('${esc(u.username)}')">Delete</button></td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+async function addUser() {
+  const username = document.getElementById('newUsername').value.trim();
+  const password = document.getElementById('newPassword').value;
+  const role = document.getElementById('newRole').value;
+  if (!username) { alert('Please enter a username.'); return; }
+  if (!password) { alert('Please enter a password.'); return; }
+  try {
+    const res = await fetch('/api/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, role }),
+    });
+    if (res.ok) {
+      document.getElementById('newUsername').value = '';
+      document.getElementById('newPassword').value = '';
+      document.getElementById('newRole').value = 'viewer';
+      loadUsers();
+    } else {
+      const err = await res.json();
+      alert('Failed to create user: ' + (err.detail || 'Unknown error'));
+    }
+  } catch (e) {
+    alert('Failed to create user: ' + e.message);
+  }
+}
+
+async function deleteUserUI(username) {
+  if (!confirm(`Delete user "${username}"?`)) return;
+  try {
+    await fetch(`/api/users/${encodeURIComponent(username)}`, { method: 'DELETE' });
+    loadUsers();
   } catch {}
 }
 </script>
