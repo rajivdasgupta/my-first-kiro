@@ -1,0 +1,30 @@
+{
+  "family": "finxcloud",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "finxcloud",
+      "image": "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/finxcloud:latest",
+      "portMappings": [
+        { "containerPort": 8000, "protocol": "tcp" }
+      ],
+      "environment": [
+        { "name": "FINXCLOUD_ADMIN_USER", "value": "admin" },
+        { "name": "FINXCLOUD_ADMIN_PASS", "value": "CHANGE_ME" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/finxcloud",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "essential": true
+    }
+  ]
+}

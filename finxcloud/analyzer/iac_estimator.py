@@ -1,5 +1,7 @@
 """Infrastructure-as-Code cost estimation for FinXCloud."""
 
+from __future__ import annotations
+
 import logging
 
 log = logging.getLogger(__name__)
@@ -87,6 +89,76 @@ class IaCCostEstimator:
             "default": 0.023,
         },
     }
+
+    # Mapping from Terraform resource types to internal resource types
+    TERRAFORM_RESOURCE_MAP: dict[str, str] = {
+        "aws_instance": "aws_instance",
+        "aws_db_instance": "aws_db_instance",
+        "aws_ebs_volume": "aws_ebs_volume",
+        "aws_lb": "aws_lb",
+        "aws_nat_gateway": "aws_nat_gateway",
+        "aws_elasticache_cluster": "aws_elasticache_cluster",
+        "aws_opensearch_domain": "aws_opensearch_domain",
+        "aws_s3_bucket": "aws_s3_bucket",
+    }
+
+    def estimate_from_terraform_plan(self, plan_json: dict) -> dict:
+        """Estimate monthly cost from ``terraform show -json tfplan`` output.
+
+        Parses the ``resource_changes`` array, extracts resource type,
+        instance type, and count, then delegates to the existing pricing
+        lookup via :meth:`estimate_from_resources`.
+
+        Args:
+            plan_json: Parsed JSON from ``terraform show -json tfplan``.
+
+        Returns:
+            Same format as :meth:`estimate_from_resources`.
+        """
+        resource_changes = plan_json.get("resource_changes", [])
+        resources: list[dict] = []
+
+        for change in resource_changes:
+            actions = change.get("change", {}).get("actions", [])
+            # Skip resources being destroyed with no create
+            if actions == ["delete"]:
+                continue
+
+            tf_type = change.get("type", "")
+            mapped_type = self.TERRAFORM_RESOURCE_MAP.get(tf_type)
+            if not mapped_type:
+                log.debug("Skipping unsupported Terraform resource type: %s", tf_type)
+                continue
+
+            after = change.get("change", {}).get("after", {}) or {}
+            resource = self._extract_terraform_resource(mapped_type, after)
+            resources.append(resource)
+
+        return self.estimate_from_resources(resources)
+
+    def _extract_terraform_resource(self, res_type: str, attrs: dict) -> dict:
+        """Extract a normalised resource dict from Terraform plan attributes."""
+        resource: dict = {"type": res_type}
+
+        if res_type == "aws_instance":
+            resource["instance_type"] = attrs.get("instance_type", "default")
+        elif res_type == "aws_db_instance":
+            resource["instance_type"] = attrs.get("instance_class", "default")
+        elif res_type == "aws_ebs_volume":
+            resource["volume_type"] = attrs.get("type", "gp3")
+            resource["size_gb"] = attrs.get("size", 20)
+        elif res_type == "aws_elasticache_cluster":
+            resource["instance_type"] = attrs.get("node_type", "default")
+            resource["count"] = attrs.get("num_cache_nodes", 1)
+        elif res_type == "aws_opensearch_domain":
+            cluster_cfg = attrs.get("cluster_config", {}) or {}
+            resource["instance_type"] = cluster_cfg.get("instance_type", "default")
+            resource["count"] = cluster_cfg.get("instance_count", 1)
+        elif res_type in ("aws_lb", "aws_nat_gateway"):
+            resource["instance_type"] = "default"
+
+        resource.setdefault("count", 1)
+        return resource
 
     def estimate_from_resources(self, resources: list[dict]) -> dict:
         """Estimate monthly cost from a list of resource definitions.

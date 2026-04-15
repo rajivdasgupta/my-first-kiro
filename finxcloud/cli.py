@@ -1130,6 +1130,27 @@ def webhooks_remove(webhook_id: str) -> None:
         sys.exit(1)
 
 
+@main.command("slack-test")
+@click.option("--webhook-url", required=True, help="Slack incoming webhook URL to test.")
+def slack_test(webhook_url: str) -> None:
+    """Send a test message to a Slack webhook to verify connectivity."""
+    from finxcloud.integrations.slack.alert_bot import SlackAlertBot
+
+    bot = SlackAlertBot(webhook_url)
+    console.print("[bold blue]Sending test message to Slack...[/bold blue]")
+    result = bot.send_cost_alert(
+        alert_name="Test Alert",
+        current_spend=1234.56,
+        threshold=2000.00,
+        period="daily",
+    )
+    if result.get("ok"):
+        console.print("[green]  ✓ Test message sent successfully.[/green]")
+    else:
+        console.print(f"[red]  ✗ Failed: {result.get('error')}[/red]")
+        sys.exit(1)
+
+
 @main.command("report-send")
 def report_send() -> None:
     """Execute due scheduled reports (designed to be called from cron)."""

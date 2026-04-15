@@ -1,0 +1,15 @@
+version: "3.8"
+services:
+  finxcloud:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - FINXCLOUD_ADMIN_USER=admin
+      - FINXCLOUD_ADMIN_PASS=changeme123
+    volumes:
+      - finxcloud-data:/root/.finxcloud
+volumes:
+  finxcloud-data:

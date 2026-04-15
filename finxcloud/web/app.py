@@ -1509,3 +1509,58 @@ async def get_consolidated(_user: dict = Depends(require_auth)):
         "per_account": per_account,
         "top_recommendations": all_recommendations[:20],
     }
+
+# ---------------------------------------------------------------------------
+# Terraform Cost Estimation
+# ---------------------------------------------------------------------------
+
+@app.post("/api/estimate-terraform")
+async def estimate_terraform(request: Request, _user: dict = Depends(require_auth)):
+    """Estimate costs from a Terraform plan JSON."""
+    from finxcloud.analyzer.iac_estimator import IaCCostEstimator
+    body = await request.json()
+    estimator = IaCCostEstimator()
+    return estimator.estimate_from_terraform_plan(body)
+
+
+# ---------------------------------------------------------------------------
+# Excel Export
+# ---------------------------------------------------------------------------
+
+@app.get("/api/scan/{scan_id}/xlsx")
+async def download_scan_xlsx(scan_id: str, _user: dict = Depends(require_auth)):
+    """Generate and return an Excel report for a completed scan."""
+    result = _get_completed_scan_result(scan_id)
+    try:
+        from finxcloud.output.xlsx_writer import XLSXWriter
+        xlsx_bytes = XLSXWriter.build_report_bytes(result)
+    except ImportError:
+        raise HTTPException(
+            status_code=501,
+            detail="openpyxl is not installed. Install with: pip install 'finxcloud[xlsx]'",
+        )
+    from fastapi.responses import Response
+    return Response(
+        content=xlsx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=finxcloud_report.xlsx"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Slack Test
+# ---------------------------------------------------------------------------
+
+class SlackTestRequest(BaseModel):
+    webhook_url: str
+
+
+@app.post("/api/slack-test")
+async def slack_test(req: SlackTestRequest, _user: dict = Depends(require_auth)):
+    """Send a test message to a Slack webhook."""
+    from finxcloud.integrations.slack.alert_bot import SlackAlertBot
+    bot = SlackAlertBot(webhook_url=req.webhook_url)
+    result = bot.send_cost_alert("Test Alert", 450.0, 500.0, "daily")
+    if result.get("ok"):
+        return {"status": "ok", "message": "Test alert sent to Slack"}
+    raise HTTPException(status_code=500, detail=result.get("error", "Failed to send"))

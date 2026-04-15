@@ -726,6 +726,7 @@
         <button class="btn btn-green btn-sm" onclick="openEmailModal()">Send Report</button>
         <button class="btn btn-primary btn-sm" onclick="downloadPDF()">Download PDF</button>
         <button class="btn btn-outline btn-sm" onclick="downloadCSV()">Download CSV</button>
+        <button class="btn btn-outline btn-sm" onclick="downloadXLSX()">Download Excel</button>
         <button class="btn btn-outline btn-sm" onclick="generateChargeback()">Chargeback Report</button>
         <button class="btn btn-outline btn-sm" onclick="switchTab('scan')">New Scan</button>
       </div>
@@ -1961,6 +1962,28 @@ async function downloadCSV() {
     URL.revokeObjectURL(url);
   } catch (err) {
     alert('CSV download failed: ' + err.message);
+  }
+}
+
+async function downloadXLSX() {
+  if (!currentScanId) { alert('No scan results available. Run a scan first.'); return; }
+  try {
+    const res = await fetch(`/api/scan/${currentScanId}/xlsx`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to generate Excel');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'finxcloud_report.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert('Excel download failed: ' + err.message);
   }
 }
 
