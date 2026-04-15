@@ -1394,3 +1394,118 @@ async def estimate_iac_cost(req: IaCEstimateRequest, _user: dict = Depends(requi
     estimator = IaCCostEstimator()
     result = estimator.estimate_from_resources(req.resources)
     return JSONResponse(content=result)
+
+
+# ---------------------------------------------------------------------------
+# Virtual Tags
+# ---------------------------------------------------------------------------
+
+class VirtualTagRuleRequest(BaseModel):
+    name: str
+    match_type: str
+    match_value: str
+    tag_key: str
+    tag_value: str
+
+
+@app.get("/api/virtual-tags")
+async def list_virtual_tags(_user: dict = Depends(require_auth)):
+    from finxcloud.analyzer.virtual_tags import VirtualTagManager
+    mgr = VirtualTagManager()
+    return mgr.list_rules()
+
+
+@app.post("/api/virtual-tags")
+async def create_virtual_tag(req: VirtualTagRuleRequest, _user: dict = Depends(require_auth)):
+    from finxcloud.analyzer.virtual_tags import VirtualTagManager
+    mgr = VirtualTagManager()
+    try:
+        entry = mgr.add_rule(
+            name=req.name,
+            match_type=req.match_type,
+            match_value=req.match_value,
+            tag_key=req.tag_key,
+            tag_value=req.tag_value,
+        )
+        return entry
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/virtual-tags/{rule_id}")
+async def delete_virtual_tag(rule_id: str, _user: dict = Depends(require_auth)):
+    from finxcloud.analyzer.virtual_tags import VirtualTagManager
+    mgr = VirtualTagManager()
+    if not mgr.delete_rule(rule_id):
+        raise HTTPException(status_code=404, detail="Virtual tag rule not found")
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Consolidated Dashboard
+# ---------------------------------------------------------------------------
+
+@app.get("/api/consolidated")
+async def get_consolidated(_user: dict = Depends(require_auth)):
+    """Return aggregated data across all stored accounts' latest scans."""
+    accounts = list_accounts()
+    total_cost = 0.0
+    total_resources = 0
+    total_savings = 0.0
+    per_account: list[dict] = []
+    all_recommendations: list[dict] = []
+
+    for acct in accounts:
+        scan = get_latest_scan(acct["id"])
+        if not scan or not scan.get("result"):
+            per_account.append({
+                "account_id": acct["id"],
+                "name": acct.get("name", ""),
+                "provider": acct.get("provider", "aws"),
+                "total_cost_30d": 0.0,
+                "total_resources": 0,
+                "potential_savings": 0.0,
+                "has_scan": False,
+            })
+            continue
+
+        result = scan["result"]
+        summary = result.get("summary", {})
+        overview = summary.get("overview", {})
+        acct_cost = overview.get("total_cost_30d", 0.0)
+        acct_resources = overview.get("total_resources", 0)
+        acct_savings = overview.get("total_potential_savings", 0.0)
+
+        total_cost += acct_cost
+        total_resources += acct_resources
+        total_savings += acct_savings
+
+        per_account.append({
+            "account_id": acct["id"],
+            "name": acct.get("name", ""),
+            "provider": acct.get("provider", "aws"),
+            "total_cost_30d": acct_cost,
+            "total_resources": acct_resources,
+            "potential_savings": acct_savings,
+            "has_scan": True,
+        })
+
+        for rec in result.get("recommendations", []):
+            rec_copy = dict(rec)
+            rec_copy["account_name"] = acct.get("name", "")
+            rec_copy["account_id"] = acct["id"]
+            all_recommendations.append(rec_copy)
+
+    all_recommendations.sort(
+        key=lambda r: r.get("estimated_monthly_savings", 0),
+        reverse=True,
+    )
+
+    return {
+        "total_cost_30d": round(total_cost, 2),
+        "total_resources": total_resources,
+        "total_potential_savings": round(total_savings, 2),
+        "account_count": len(accounts),
+        "per_account": per_account,
+        "top_recommendations": all_recommendations[:20],
+    }

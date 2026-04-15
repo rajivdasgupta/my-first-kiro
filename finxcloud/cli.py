@@ -1130,5 +1130,32 @@ def webhooks_remove(webhook_id: str) -> None:
         sys.exit(1)
 
 
+@main.command("report-send")
+def report_send() -> None:
+    """Execute due scheduled reports (designed to be called from cron)."""
+    from finxcloud.scheduler.report_executor import ReportExecutor
+
+    console.print("[bold blue]FinXCloud[/bold blue] — Sending due scheduled reports\n")
+    executor = ReportExecutor()
+    results = executor.execute_due_reports()
+
+    if not results:
+        console.print("  No reports due at this time.")
+        return
+
+    for r in results:
+        sid = r.get("schedule_id", "?")
+        status = r.get("status", "unknown")
+        if status == "ok":
+            recipients = ", ".join(r.get("recipients", []))
+            console.print(f"  [green]✓ Schedule {sid}: sent to {recipients}[/green]")
+        elif status == "skipped":
+            console.print(f"  [yellow]⚠ Schedule {sid}: {r.get('reason', 'skipped')}[/yellow]")
+        else:
+            console.print(f"  [red]✗ Schedule {sid}: {r.get('reason', 'failed')}[/red]")
+
+    console.print(f"\n  Processed {len(results)} report(s).")
+
+
 if __name__ == "__main__":
     main()

@@ -140,6 +140,7 @@ class RecommendationEngine:
             self._check_idle_load_balancers,
             self._check_lambda_optimization,
             self._check_opensearch_rightsizing,
+            self._check_spot_candidates,
         ]
 
         for check in checks:
@@ -619,6 +620,77 @@ class RecommendationEngine:
                     well_architected_pillar="Cost Optimization",
                     action="Downsize dedicated master nodes",
                 )
+
+    # ------------------------------------------------------------------
+    # Spot Instance Candidates
+    # ------------------------------------------------------------------
+
+    _NON_PROD_ENVS = {"dev", "development", "staging", "test", "testing", "qa", "sandbox"}
+
+    def _check_spot_candidates(self) -> None:
+        """Identify EC2 instances suitable for Spot pricing."""
+        ec2_instances = [
+            r for r in self.resources if r.get("resource_type") == "ec2_instance"
+        ]
+
+        for inst in ec2_instances:
+            state = inst.get("state", "").lower()
+            if state != "running":
+                continue
+
+            tags = inst.get("tags", {})
+            if isinstance(tags, list):
+                tags = {t.get("Key", ""): t.get("Value", "") for t in tags}
+
+            env_tag = (
+                tags.get("env", "")
+                or tags.get("environment", "")
+                or tags.get("Env", "")
+                or tags.get("Environment", "")
+            ).lower()
+
+            is_non_prod = env_tag in self._NON_PROD_ENVS
+
+            name_tag = (tags.get("Name", "") or tags.get("name", "")).lower()
+            is_batch = any(kw in name_tag for kw in ("batch", "worker", "job", "queue", "processor"))
+
+            if not (is_non_prod or is_batch):
+                continue
+
+            instance_id = inst.get("instance_id", inst.get("resource_id", "unknown"))
+            instance_type = inst.get("type", inst.get("instance_type", ""))
+            region = inst.get("region", "unknown")
+
+            spot_savings_pct = 65
+            hourly_estimates: dict[str, float] = {
+                "t3.micro": 0.0104, "t3.small": 0.0208, "t3.medium": 0.0416,
+                "t3.large": 0.0832, "t3.xlarge": 0.1664,
+                "m5.large": 0.096, "m5.xlarge": 0.192, "m5.2xlarge": 0.384,
+                "c5.large": 0.085, "c5.xlarge": 0.17,
+                "r5.large": 0.126, "r5.xlarge": 0.252,
+            }
+            hourly = hourly_estimates.get(instance_type, 0.10)
+            monthly_savings = round(hourly * 730 * spot_savings_pct / 100, 2)
+
+            reason = "non-production" if is_non_prod else "batch/stateless workload"
+            self._add(
+                category="EC2",
+                title=f"Spot Instance candidate ({reason})",
+                description=(
+                    f"Instance {instance_id} ({instance_type}) is a {reason} "
+                    f"workload. Switching to Spot could save ~{spot_savings_pct}% "
+                    f"(~${monthly_savings:.2f}/mo)."
+                ),
+                resource_id=instance_id,
+                resource_type="ec2_instance",
+                region=region,
+                estimated_monthly_savings=monthly_savings,
+                effort_level="medium",
+                priority=3,
+                well_architected_pillar="Cost Optimization",
+                action=f"Migrate to Spot Instances (est. {spot_savings_pct}% savings)",
+            )
+            self._recommendations[-1]["spot_savings_pct"] = spot_savings_pct
 
     # ------------------------------------------------------------------
     # Confidence scoring

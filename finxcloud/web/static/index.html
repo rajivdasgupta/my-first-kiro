@@ -460,7 +460,30 @@
   <div class="tab-content active" id="tab-accounts">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
       <h2 style="font-size:1.1rem;color:var(--gray-700);">Cloud Accounts</h2>
-      <button class="btn btn-primary btn-sm" onclick="openAddAccountModal()">+ Add Account</button>
+      <div style="display:flex;gap:0.5rem;">
+        <button class="btn btn-outline btn-sm" onclick="showConsolidatedView()">Consolidated View</button>
+        <button class="btn btn-primary btn-sm" onclick="openAddAccountModal()">+ Add Account</button>
+      </div>
+    </div>
+    <div id="consolidatedPanel" style="display:none;margin-bottom:1.5rem;">
+      <div class="scan-panel">
+        <h3 style="margin-bottom:1rem;color:var(--gray-700);">Consolidated View — All Accounts</h3>
+        <div class="metrics" id="consolidatedMetrics"></div>
+        <div class="table-panel" style="margin-top:1rem;">
+          <h3>Per-Account Breakdown</h3>
+          <table>
+            <thead><tr><th>Account</th><th>Provider</th><th>Cost (30d)</th><th>Resources</th><th>Potential Savings</th></tr></thead>
+            <tbody id="consolidatedAccountsBody"></tbody>
+          </table>
+        </div>
+        <div class="table-panel" style="margin-top:1rem;">
+          <h3>Top Recommendations (All Accounts)</h3>
+          <table>
+            <thead><tr><th>Account</th><th>Category</th><th>Title</th><th>Effort</th><th>Savings/mo</th></tr></thead>
+            <tbody id="consolidatedRecsBody"></tbody>
+          </table>
+        </div>
+      </div>
     </div>
     <div class="account-grid" id="accountGrid">
       <p style="color:var(--gray-500);grid-column:1/-1;text-align:center;padding:2rem;">
@@ -1168,6 +1191,50 @@
       <p style="color:var(--gray-500);text-align:center;padding:2rem;">Loading users...</p>
     </div>
   </div>
+
+  <!-- Virtual Tags Management -->
+  <div class="scan-panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+      <h2 style="font-size:1.1rem;color:var(--gray-700);">Virtual Tags</h2>
+    </div>
+    <p style="color:var(--gray-500);font-size:0.85rem;margin-bottom:1rem;">
+      Assign virtual tags to untagged resources based on matching rules (service, account, region, resource type, or name pattern).
+    </p>
+    <div style="background:#fff;border-radius:var(--radius);padding:1rem;margin-bottom:1rem;">
+      <div class="form-grid" style="grid-template-columns:1fr 1fr 1fr 1fr 1fr auto;align-items:end;">
+        <div class="form-group">
+          <label for="vtRuleName">Rule Name</label>
+          <input type="text" id="vtRuleName" placeholder="e.g. Tag dev instances" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+        </div>
+        <div class="form-group">
+          <label for="vtMatchType">Match Type</label>
+          <select id="vtMatchType" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+            <option value="service">Service</option>
+            <option value="account">Account</option>
+            <option value="region">Region</option>
+            <option value="resource_type">Resource Type</option>
+            <option value="name_pattern">Name Pattern</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="vtMatchValue">Match Value</label>
+          <input type="text" id="vtMatchValue" placeholder="e.g. ec2*" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+        </div>
+        <div class="form-group">
+          <label for="vtTagKey">Tag Key</label>
+          <input type="text" id="vtTagKey" placeholder="e.g. Team" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+        </div>
+        <div class="form-group">
+          <label for="vtTagValue">Tag Value</label>
+          <input type="text" id="vtTagValue" placeholder="e.g. Platform" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" onclick="saveVirtualTag()" style="margin-bottom:0.25rem;">Add Rule</button>
+      </div>
+    </div>
+    <div id="virtualTagList">
+      <p style="color:var(--gray-500);text-align:center;padding:2rem;">Loading virtual tag rules...</p>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -1618,9 +1685,15 @@ function renderDashboard(data) {
     commitBody.innerHTML = '';
     commitRecs.forEach(r => {
       const prioClass = r.priority === 'high' ? 'badge-high' : r.priority === 'medium' ? 'badge-medium' : 'badge-low';
+      const roiInfo = r.roi_pct != null
+        ? `<div style="font-size:0.8rem;color:var(--gray-500);margin-top:0.25rem;">` +
+          `Commitment: $${r.commitment_hourly || 0}/hr (${r.term_years || 1}yr) | ` +
+          `Annual savings: $${(r.annual_savings || 0).toLocaleString()} | ` +
+          `ROI: ${r.roi_pct}% | Break-even: ${r.break_even_months || '--'} months</div>`
+        : '';
       commitBody.innerHTML += `<tr>
         <td>${esc(r.type || '')}</td>
-        <td>${esc(r.description || '')}</td>
+        <td>${esc(r.description || '')}${roiInfo}</td>
         <td><span class="badge ${prioClass}">${esc(r.priority || '')}</span></td>
         <td class="amount-savings">${(r.estimated_savings_pct || 0).toFixed(0)}%</td>
       </tr>`;
@@ -1634,9 +1707,10 @@ function renderDashboard(data) {
                         rec.effort_level === 'medium' ? 'badge-medium' : 'badge-high';
     const conf = rec.confidence_score != null ? rec.confidence_score : '--';
     const confColor = conf >= 70 ? 'var(--green)' : conf >= 40 ? 'var(--orange)' : 'var(--red)';
+    const spotBadge = rec.spot_savings_pct ? ` <span class="badge badge-medium" style="background:#dbeafe;color:#2563eb;">Spot ${rec.spot_savings_pct}%</span>` : '';
     recsBody.innerHTML += `<tr>
       <td>${i+1}</td>
-      <td>${esc(rec.category || '')}</td>
+      <td>${esc(rec.category || '')}${spotBadge}</td>
       <td>${esc(rec.title || '')}</td>
       <td><span style="font-weight:600;color:${typeof conf === 'number' ? confColor : 'var(--gray-500)'}">${typeof conf === 'number' ? conf + '%' : conf}</span></td>
       <td><span class="badge ${effortClass}">${esc(rec.effort_level || '')}</span></td>
@@ -2303,7 +2377,7 @@ switchTab = function(tabName) {
   if (tabName === 'schedules') loadSchedules();
   if (tabName === 'notifications') { loadWebhooks(); loadAlerts(); loadReportSchedules(); }
   if (tabName === 'budgets') { loadBudgets(); populateBudgetAccountSelect(); loadSaaSCosts(); }
-  if (tabName === 'settings') { loadUsers(); }
+  if (tabName === 'settings') { loadUsers(); loadVirtualTags(); }
 };
 
 // ===================================================================
@@ -2704,6 +2778,132 @@ function renderIaCResult(result) {
     </tr>`;
   });
   document.getElementById('iacTotalCost').textContent = `Estimated Total: $${(result.total_monthly || 0).toFixed(2)}/month`;
+}
+
+// ===================================================================
+// CONSOLIDATED VIEW
+// ===================================================================
+async function showConsolidatedView() {
+  const panel = document.getElementById('consolidatedPanel');
+  if (panel.style.display !== 'none') {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = '';
+  try {
+    const res = await fetch('/api/consolidated');
+    if (!res.ok) { alert('Failed to load consolidated data.'); return; }
+    const data = await res.json();
+    renderConsolidatedView(data);
+  } catch (err) {
+    alert('Failed to load consolidated data: ' + err.message);
+  }
+}
+
+function renderConsolidatedView(data) {
+  const metricsEl = document.getElementById('consolidatedMetrics');
+  metricsEl.innerHTML =
+    '<div class="card"><div class="label">Total Accounts</div><div class="value">' + data.account_count + '</div></div>' +
+    '<div class="card"><div class="label">Total Cost (30d)</div><div class="value cost">$' + data.total_cost_30d.toFixed(2) + '</div></div>' +
+    '<div class="card"><div class="label">Total Resources</div><div class="value">' + data.total_resources.toLocaleString() + '</div></div>' +
+    '<div class="card"><div class="label">Total Potential Savings</div><div class="value savings">$' + data.total_potential_savings.toFixed(2) + '</div></div>';
+
+  const acctBody = document.getElementById('consolidatedAccountsBody');
+  acctBody.innerHTML = '';
+  (data.per_account || []).forEach(function(a) {
+    const providerColors = {aws: '#ff9900', azure: '#0078d4', gcp: '#4285f4'};
+    const providerLabels = {aws: 'AWS', azure: 'Azure', gcp: 'GCP'};
+    const badge = '<span style="background:' + (providerColors[a.provider]||'#666') + ';color:#fff;padding:2px 6px;border-radius:4px;font-size:0.7rem;">' + (providerLabels[a.provider]||a.provider) + '</span>';
+    acctBody.innerHTML += '<tr>' +
+      '<td>' + esc(a.name) + '</td>' +
+      '<td>' + badge + '</td>' +
+      '<td class="amount-cost">$' + a.total_cost_30d.toFixed(2) + '</td>' +
+      '<td>' + a.total_resources + '</td>' +
+      '<td class="amount-savings">$' + a.potential_savings.toFixed(2) + '</td>' +
+      '</tr>';
+  });
+
+  const recsBody = document.getElementById('consolidatedRecsBody');
+  recsBody.innerHTML = '';
+  (data.top_recommendations || []).slice(0, 15).forEach(function(r) {
+    const effortClass = r.effort_level === 'low' ? 'badge-low' : r.effort_level === 'medium' ? 'badge-medium' : 'badge-high';
+    recsBody.innerHTML += '<tr>' +
+      '<td style="font-size:0.85rem;">' + esc(r.account_name || '--') + '</td>' +
+      '<td>' + esc(r.category || '') + '</td>' +
+      '<td>' + esc(r.title || '') + '</td>' +
+      '<td><span class="badge ' + effortClass + '">' + esc(r.effort_level || '') + '</span></td>' +
+      '<td class="amount-savings">$' + (r.estimated_monthly_savings || 0).toFixed(2) + '</td>' +
+      '</tr>';
+  });
+}
+
+// ===================================================================
+// VIRTUAL TAGS
+// ===================================================================
+async function loadVirtualTags() {
+  try {
+    const res = await fetch('/api/virtual-tags');
+    if (!res.ok) return;
+    const rules = await res.json();
+    renderVirtualTagList(rules);
+  } catch (e) {}
+}
+
+function renderVirtualTagList(rules) {
+  const el = document.getElementById('virtualTagList');
+  if (!rules.length) {
+    el.innerHTML = '<p style="color:var(--gray-500);text-align:center;padding:2rem;">No virtual tag rules configured.</p>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Name</th><th>Match</th><th>Tag</th><th>Created</th><th>Actions</th></tr></thead><tbody>';
+  for (const r of rules) {
+    html += '<tr>' +
+      '<td>' + esc(r.name) + '</td>' +
+      '<td><span class="badge badge-medium">' + esc(r.match_type) + '</span> = ' + esc(r.match_value) + '</td>' +
+      '<td><strong>' + esc(r.tag_key) + '</strong>: ' + esc(r.tag_value) + '</td>' +
+      '<td style="font-size:0.85rem;">' + (r.created_at ? new Date(r.created_at).toLocaleDateString() : '--') + '</td>' +
+      '<td><button class="btn btn-danger btn-sm" onclick="deleteVirtualTag(\'' + r.id + '\')">Delete</button></td>' +
+      '</tr>';
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+async function saveVirtualTag() {
+  const name = document.getElementById('vtRuleName').value.trim();
+  const matchType = document.getElementById('vtMatchType').value;
+  const matchValue = document.getElementById('vtMatchValue').value.trim();
+  const tagKey = document.getElementById('vtTagKey').value.trim();
+  const tagValue = document.getElementById('vtTagValue').value.trim();
+  if (!name || !matchValue || !tagKey || !tagValue) {
+    alert('Please fill in all fields.');
+    return;
+  }
+  try {
+    const res = await fetch('/api/virtual-tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, match_type: matchType, match_value: matchValue, tag_key: tagKey, tag_value: tagValue }),
+    });
+    if (res.ok) {
+      document.getElementById('vtRuleName').value = '';
+      document.getElementById('vtMatchValue').value = '';
+      document.getElementById('vtTagKey').value = '';
+      document.getElementById('vtTagValue').value = '';
+      loadVirtualTags();
+    } else {
+      const err = await res.json();
+      alert('Failed: ' + (err.detail || 'Unknown error'));
+    }
+  } catch (e) { alert('Failed: ' + e.message); }
+}
+
+async function deleteVirtualTag(id) {
+  if (!confirm('Delete this virtual tag rule?')) return;
+  try {
+    await fetch('/api/virtual-tags/' + id, { method: 'DELETE' });
+    loadVirtualTags();
+  } catch (e) {}
 }
 </script>
 

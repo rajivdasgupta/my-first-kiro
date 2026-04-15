@@ -163,55 +163,107 @@ class CommitmentsAnalyzer:
             raise
 
     @staticmethod
+    def _estimate_on_demand_monthly(sp_coverage: dict | None, ri_coverage: dict | None) -> float:
+        """Estimate total monthly on-demand spend from coverage data."""
+        total = 0.0
+        if sp_coverage:
+            for p in sp_coverage.get("periods", []):
+                total += p.get("on_demand_cost", 0.0)
+        if ri_coverage:
+            for p in ri_coverage.get("periods", []):
+                total += p.get("on_demand_hours", 0.0) * 0.05
+        return total or 1000.0  # fallback if no data
+
+    @staticmethod
     def _generate_recommendations(
         sp_coverage: dict | None,
         ri_coverage: dict | None,
         on_demand_pct: float,
     ) -> list[dict]:
-        """Generate commitment purchase recommendations."""
+        """Generate commitment purchase recommendations with ROI details."""
         recs: list[dict] = []
 
+        monthly_od = CommitmentsAnalyzer._estimate_on_demand_monthly(sp_coverage, ri_coverage)
+        annual_od = monthly_od * 12
+
         if on_demand_pct > 50:
-            # High on-demand spend — recommend Savings Plans
             estimated_savings_pct = min(on_demand_pct * 0.30, 30.0)
+            commitment_hourly = round(monthly_od / 730 * 0.70, 2)
+            annual_cost = round(commitment_hourly * 730 * 12, 2)
+            annual_savings = round(annual_od * estimated_savings_pct / 100, 2)
+            roi_pct = round((annual_savings / annual_cost) * 100, 1) if annual_cost > 0 else 0.0
+            break_even = round(annual_cost / (annual_savings / 12), 1) if annual_savings > 0 else 12.0
             recs.append({
                 "type": "savings_plan",
                 "title": "Purchase Compute Savings Plans",
                 "description": (
                     f"{on_demand_pct:.0f}% of compute spend is on-demand. "
-                    f"A Compute Savings Plan could reduce costs by up to "
-                    f"{estimated_savings_pct:.0f}% on committed usage."
+                    f"A ${commitment_hourly}/hour commitment for 1-year term "
+                    f"could reduce costs by up to {estimated_savings_pct:.0f}% "
+                    f"on committed usage (ROI: {roi_pct}%, break-even: {break_even:.0f} months)."
                 ),
                 "estimated_savings_pct": round(estimated_savings_pct, 1),
                 "priority": "high",
+                "commitment_hourly": commitment_hourly,
+                "term_years": 1,
+                "annual_savings": annual_savings,
+                "annual_cost": annual_cost,
+                "roi_pct": roi_pct,
+                "break_even_months": round(break_even),
             })
 
         if on_demand_pct > 30:
+            commitment_hourly = round(monthly_od / 730 * 0.60, 2)
+            annual_cost = round(commitment_hourly * 730 * 12, 2)
+            annual_savings = round(annual_od * 0.30, 2)
+            roi_pct = round((annual_savings / annual_cost) * 100, 1) if annual_cost > 0 else 0.0
+            break_even = round(annual_cost / (annual_savings / 12), 1) if annual_savings > 0 else 12.0
             recs.append({
                 "type": "reserved_instance",
                 "title": "Evaluate Reserved Instances for steady-state workloads",
                 "description": (
-                    "For predictable, long-running workloads (EC2, RDS, "
-                    "ElastiCache, OpenSearch), Reserved Instances offer "
-                    "up to 72% savings over on-demand pricing."
+                    f"For predictable, long-running workloads (EC2, RDS, "
+                    f"ElastiCache, OpenSearch), a ${commitment_hourly}/hour "
+                    f"commitment for 1-year term offers up to 72% savings "
+                    f"(ROI: {roi_pct}%, break-even: {break_even:.0f} months)."
                 ),
                 "estimated_savings_pct": 30.0,
                 "priority": "medium",
+                "commitment_hourly": commitment_hourly,
+                "term_years": 1,
+                "annual_savings": annual_savings,
+                "annual_cost": annual_cost,
+                "roi_pct": roi_pct,
+                "break_even_months": round(break_even),
             })
 
         if sp_coverage and sp_coverage.get("available"):
             avg = sp_coverage.get("avg_coverage_pct", 0)
             if 0 < avg < 80:
+                gap_pct = 80 - avg
+                estimated_savings_pct = round(gap_pct * 0.30, 1)
+                additional_hourly = round(monthly_od * (gap_pct / 100) / 730 * 0.70, 2)
+                annual_cost = round(additional_hourly * 730 * 12, 2)
+                annual_savings = round(annual_od * estimated_savings_pct / 100, 2)
+                roi_pct = round((annual_savings / annual_cost) * 100, 1) if annual_cost > 0 else 0.0
+                break_even = round(annual_cost / (annual_savings / 12), 1) if annual_savings > 0 else 12.0
                 recs.append({
                     "type": "increase_sp",
                     "title": "Increase Savings Plans coverage",
                     "description": (
                         f"Current Savings Plans coverage is {avg:.0f}%. "
-                        f"Increasing to 80%+ would capture more on-demand "
-                        f"spend at discounted rates."
+                        f"Adding ${additional_hourly}/hour commitment to reach 80%+ "
+                        f"would save ~{estimated_savings_pct}% more "
+                        f"(ROI: {roi_pct}%, break-even: {break_even:.0f} months)."
                     ),
-                    "estimated_savings_pct": round((80 - avg) * 0.30, 1),
+                    "estimated_savings_pct": estimated_savings_pct,
                     "priority": "medium",
+                    "commitment_hourly": additional_hourly,
+                    "term_years": 1,
+                    "annual_savings": annual_savings,
+                    "annual_cost": annual_cost,
+                    "roi_pct": roi_pct,
+                    "break_even_months": round(break_even),
                 })
 
         return recs
