@@ -4,11 +4,14 @@
 - This is a test/dev environment. The user has given explicit approval to perform all tasks autonomously.
 - Do not ask for permission — just execute and deliver the final output.
 - Test everything before presenting results to the user.
+- Full approval granted for web searches, git operations (add, commit, push), file changes, and command execution.
 
 ## Execution Style
 - Work in autopilot mode. Complete tasks end-to-end.
 - Only present the final result, not intermediate steps or confirmations.
 - If something fails, fix it and move on. Only ask the user if truly stuck.
+- Commit and push changes automatically without asking.
+- Perform web research as needed without asking.
 
 ## Output
 - Be concise. Show what was done, not what you're about to do.
