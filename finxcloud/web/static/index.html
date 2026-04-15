@@ -736,6 +736,38 @@
         </table>
       </div>
 
+      <!-- Resource Details (expandable) -->
+      <div class="table-panel" id="resourceDetailsPanel">
+        <h3>Resource Details</h3>
+        <div style="padding:0 1rem 0.5rem;">
+          <select id="resourceTypeFilter" onchange="filterResourceDetails()" style="padding:0.4rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.85rem;">
+            <option value="all">All Resource Types</option>
+          </select>
+        </div>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead>
+              <tr><th>Resource ID</th><th>Type</th><th>Region</th><th>State</th><th>Account</th><th>Details</th></tr>
+            </thead>
+            <tbody id="resourceDetailsBody"></tbody>
+          </table>
+        </div>
+        <div style="padding:0.75rem 1rem;font-size:0.85rem;color:var(--gray-500);" id="resourceDetailsCount"></div>
+      </div>
+
+      <!-- Detailed Recommendations -->
+      <div class="table-panel">
+        <h3>All Recommendations (Detailed)</h3>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead>
+              <tr><th>#</th><th>Category</th><th>Title</th><th>Description</th><th>Resource</th><th>Region</th><th>Action</th><th>Effort</th><th>Savings/mo</th></tr>
+            </thead>
+            <tbody id="allRecsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
       <!-- Roadmap -->
       <div id="roadmapSection">
         <h3 style="margin-bottom:0.75rem;color:var(--gray-700);">Implementation Roadmap</h3>
@@ -1389,6 +1421,12 @@ function renderDashboard(data) {
   // Tag-based cost allocation
   renderTagAllocation(data.tag_allocation);
 
+  // Resource details
+  renderResourceDetails(data.resources || []);
+
+  // All recommendations detailed
+  renderAllRecommendations(recommendations || []);
+
   document.getElementById('dashboard').classList.add('show');
 }
 
@@ -1411,6 +1449,67 @@ function renderTagAllocation(tagData) {
     });
     html += `</tbody></table>`;
     content.innerHTML += html;
+  });
+}
+
+let _allResources = [];
+
+function renderResourceDetails(resources) {
+  _allResources = resources;
+  const filter = document.getElementById('resourceTypeFilter');
+  const types = [...new Set(resources.map(r => r.resource_type || 'unknown'))].sort();
+  filter.innerHTML = '<option value="all">All Resource Types (' + resources.length + ')</option>';
+  types.forEach(t => {
+    const count = resources.filter(r => (r.resource_type || 'unknown') === t).length;
+    filter.innerHTML += '<option value="' + esc(t) + '">' + esc(t) + ' (' + count + ')</option>';
+  });
+  filterResourceDetails();
+}
+
+function filterResourceDetails() {
+  const selected = document.getElementById('resourceTypeFilter').value;
+  const filtered = selected === 'all' ? _allResources : _allResources.filter(r => (r.resource_type || 'unknown') === selected);
+  const body = document.getElementById('resourceDetailsBody');
+  const shown = filtered.slice(0, 200);
+  body.innerHTML = '';
+  shown.forEach(r => {
+    const details = [];
+    if (r.instance_type) details.push('Type: ' + r.instance_type);
+    if (r.size_gb) details.push('Size: ' + r.size_gb + ' GB');
+    if (r.engine) details.push('Engine: ' + r.engine);
+    if (r.runtime) details.push('Runtime: ' + r.runtime);
+    if (r.memory_mb) details.push('Memory: ' + r.memory_mb + ' MB');
+    if (r.bucket_name) details.push('Bucket: ' + r.bucket_name);
+    body.innerHTML += '<tr>' +
+      '<td style="font-family:monospace;font-size:0.8rem;">' + esc(r.resource_id || r.id || '--') + '</td>' +
+      '<td>' + esc(r.resource_type || '--') + '</td>' +
+      '<td>' + esc(r.region || '--') + '</td>' +
+      '<td>' + esc(r.state || r.status || '--') + '</td>' +
+      '<td style="font-family:monospace;font-size:0.8rem;">' + esc(r.account_id || '--') + '</td>' +
+      '<td style="font-size:0.8rem;">' + esc(details.join(' | ') || '--') + '</td>' +
+      '</tr>';
+  });
+  document.getElementById('resourceDetailsCount').textContent =
+    'Showing ' + shown.length + ' of ' + filtered.length + ' resources';
+}
+
+function renderAllRecommendations(recs) {
+  const body = document.getElementById('allRecsBody');
+  body.innerHTML = '';
+  recs.forEach((rec, i) => {
+    const effortClass = rec.effort_level === 'low' ? 'badge-low' :
+                        rec.effort_level === 'medium' ? 'badge-medium' : 'badge-high';
+    body.innerHTML += '<tr>' +
+      '<td>' + (i+1) + '</td>' +
+      '<td>' + esc(rec.category || '') + '</td>' +
+      '<td>' + esc(rec.title || '') + '</td>' +
+      '<td style="font-size:0.85rem;max-width:250px;">' + esc(rec.description || '--') + '</td>' +
+      '<td style="font-family:monospace;font-size:0.8rem;">' + esc(rec.resource_id || '--') + '</td>' +
+      '<td>' + esc(rec.region || '--') + '</td>' +
+      '<td style="font-size:0.85rem;">' + esc(rec.action || '--') + '</td>' +
+      '<td><span class="badge ' + effortClass + '">' + esc(rec.effort_level || '') + '</span></td>' +
+      '<td class="amount-savings">$' + (rec.estimated_monthly_savings || 0).toFixed(2) + '</td>' +
+      '</tr>';
   });
 }
 
