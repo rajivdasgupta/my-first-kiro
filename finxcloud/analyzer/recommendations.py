@@ -34,6 +34,52 @@ _OPENSEARCH_HOURLY: dict[str, float] = {
     "m6g.large.search": 0.128,
     "r6g.large.search": 0.15,
 }
+# ---------------------------------------------------------------------------
+# EC2 instance downsize mapping
+# ---------------------------------------------------------------------------
+_EC2_DOWNSIZE_MAP: dict[str, str] = {
+    "m5.2xlarge": "m5.xlarge",
+    "m5.xlarge": "m5.large",
+    "m5.large": "t3.medium",
+    "r5.2xlarge": "r5.xlarge",
+    "r5.xlarge": "r5.large",
+    "r5.large": "r5.medium",
+    "c5.2xlarge": "c5.xlarge",
+    "c5.xlarge": "c5.large",
+    "c5.large": "c5.medium",
+    "t3.xlarge": "t3.large",
+    "t3.large": "t3.medium",
+    "t3.medium": "t3.small",
+    "t3.small": "t3.micro",
+    "t2.xlarge": "t2.large",
+    "t2.large": "t2.medium",
+    "t2.medium": "t2.small",
+    "t2.small": "t2.micro",
+    "m6i.xlarge": "m6i.large",
+    "m6i.large": "t3.medium",
+    "c6i.xlarge": "c6i.large",
+    "r6i.xlarge": "r6i.large",
+}
+
+# ---------------------------------------------------------------------------
+# RDS instance downsize mapping
+# ---------------------------------------------------------------------------
+_RDS_DOWNSIZE_MAP: dict[str, str] = {
+    "db.r5.2xlarge": "db.r5.xlarge",
+    "db.r5.xlarge": "db.r5.large",
+    "db.r5.large": "db.r5.medium",
+    "db.m5.2xlarge": "db.m5.xlarge",
+    "db.m5.xlarge": "db.m5.large",
+    "db.m5.large": "db.m5.medium",
+    "db.r6g.xlarge": "db.r6g.large",
+    "db.r6g.large": "db.r6g.medium",
+    "db.m6g.xlarge": "db.m6g.large",
+    "db.m6g.large": "db.m6g.medium",
+    "db.t3.large": "db.t3.medium",
+    "db.t3.medium": "db.t3.small",
+    "db.t3.small": "db.t3.micro",
+}
+
 _OPENSEARCH_DOWNSIZE_MAP: dict[str, str] = {
     "m5.xlarge.search": "m5.large.search",
     "m5.2xlarge.search": "m5.xlarge.search",
@@ -166,13 +212,25 @@ class RecommendationEngine:
 
                 avg_cpu = util.get("avg_cpu")
                 if avg_cpu is not None and avg_cpu < _EC2_IDLE_CPU_THRESHOLD:
+                    inst_type: str = inst.get("type", inst.get("instance_type", ""))
+                    target_type = _EC2_DOWNSIZE_MAP.get(inst_type)
+                    desc_suffix = (
+                        f" Consider downsizing to {target_type}."
+                        if target_type
+                        else " Consider downsizing or terminating."
+                    )
+                    action_text = (
+                        f"Downsize instance to {target_type}"
+                        if target_type
+                        else "Downsize or terminate instance"
+                    )
                     self._add(
                         category="EC2",
                         title="Idle EC2 instance (low CPU utilization)",
                         description=(
                             f"Instance {instance_id} has an average CPU of "
-                            f"{avg_cpu:.1f}% over the measurement period. "
-                            f"Consider downsizing or terminating."
+                            f"{avg_cpu:.1f}% over the measurement period."
+                            f"{desc_suffix}"
                         ),
                         resource_id=instance_id,
                         resource_type="ec2_instance",
@@ -181,7 +239,8 @@ class RecommendationEngine:
                         effort_level="medium",
                         priority=2,
                         well_architected_pillar="Cost Optimization",
-                        action="Downsize or terminate instance",
+                        action=action_text,
+                        target_instance_type=target_type,
                     )
 
     def _check_unattached_ebs(self) -> None:
@@ -321,13 +380,24 @@ class RecommendationEngine:
             avg_cpu = util.get("avg_cpu")
             if avg_cpu is not None and avg_cpu < _RDS_IDLE_CPU_THRESHOLD:
                 savings = self._estimate_rds_savings(db)
+                instance_class: str = db.get("class", db.get("instance_class", ""))
+                target_class = _RDS_DOWNSIZE_MAP.get(instance_class)
+                desc_suffix = (
+                    f"Consider downsizing to {target_class}."
+                    if target_class
+                    else "Consider downsizing the instance class or using Aurora Serverless."
+                )
+                action_text = (
+                    f"Downsize instance class to {target_class}"
+                    if target_class
+                    else "Downsize instance class or migrate to serverless"
+                )
                 self._add(
                     category="RDS",
                     title="Oversized or idle RDS instance",
                     description=(
                         f"RDS instance {db_id} has avg CPU of {avg_cpu:.1f}%. "
-                        f"Consider downsizing the instance class or using "
-                        f"Aurora Serverless."
+                        f"{desc_suffix}"
                     ),
                     resource_id=db_id,
                     resource_type="rds_instance",
@@ -336,7 +406,8 @@ class RecommendationEngine:
                     effort_level="high",
                     priority=2,
                     well_architected_pillar="Cost Optimization",
-                    action="Downsize instance class or migrate to serverless",
+                    action=action_text,
+                    target_instance_type=target_class,
                 )
 
     def _check_s3_lifecycle(self) -> None:
@@ -623,6 +694,7 @@ class RecommendationEngine:
         well_architected_pillar: str,
         action: str,
         confidence_score: int | None = None,
+        target_instance_type: str | None = None,
     ) -> None:
         """Append a recommendation to the internal list."""
         # Auto-compute confidence if not provided
@@ -655,6 +727,8 @@ class RecommendationEngine:
             "action": action,
             "confidence_score": confidence_score,
         }
+        if target_instance_type:
+            rec["target_instance_type"] = target_instance_type
         self._recommendations.append(rec)
         log.debug("Recommendation: %s — %s (saves $%.2f/mo, confidence %d%%)",
                    category, title, estimated_monthly_savings, confidence_score)

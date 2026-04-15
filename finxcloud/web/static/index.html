@@ -837,6 +837,88 @@
         <p style="color:var(--gray-500);text-align:center;padding:2rem;">Loading webhooks...</p>
       </div>
     </div>
+
+    <!-- Cost Alerts -->
+    <div class="scan-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+        <h2 style="font-size:1.1rem;color:var(--gray-700);">Cost Alerts</h2>
+      </div>
+      <p style="color:var(--gray-500);font-size:0.85rem;margin-bottom:1rem;">
+        Set spend thresholds to get notified when costs exceed a limit.
+      </p>
+      <div style="background:#fff;border-radius:var(--radius);padding:1rem;margin-bottom:1rem;">
+        <div class="form-grid" style="grid-template-columns:1fr 1fr 1fr 1fr auto;align-items:end;">
+          <div class="form-group">
+            <label for="alertName">Alert Name</label>
+            <input type="text" id="alertName" placeholder="e.g. Daily spend limit" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+          </div>
+          <div class="form-group">
+            <label for="alertThreshold">Threshold (USD)</label>
+            <input type="number" id="alertThreshold" min="0" step="0.01" placeholder="e.g. 500" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+          </div>
+          <div class="form-group">
+            <label for="alertType">Period</label>
+            <select id="alertType" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="alertNotifyVia">Notify Via</label>
+            <select id="alertNotifyVia" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+              <option value="webhook">Webhook</option>
+              <option value="email">Email</option>
+            </select>
+          </div>
+          <button type="button" class="btn btn-primary btn-sm" onclick="saveAlert()" style="margin-bottom:0.25rem;">Add Alert</button>
+        </div>
+      </div>
+      <div id="alertList">
+        <p style="color:var(--gray-500);text-align:center;padding:2rem;">Loading alerts...</p>
+      </div>
+    </div>
+
+    <!-- Scheduled Reports -->
+    <div class="scan-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+        <h2 style="font-size:1.1rem;color:var(--gray-700);">Scheduled Reports</h2>
+      </div>
+      <p style="color:var(--gray-500);font-size:0.85rem;margin-bottom:1rem;">
+        Schedule automatic report delivery to email recipients.
+      </p>
+      <div style="background:#fff;border-radius:var(--radius);padding:1rem;margin-bottom:1rem;">
+        <div class="form-grid" style="grid-template-columns:1fr 1fr 1fr 1fr auto;align-items:end;">
+          <div class="form-group">
+            <label for="rptSchedName">Schedule Name</label>
+            <input type="text" id="rptSchedName" placeholder="e.g. Weekly team report" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+          </div>
+          <div class="form-group">
+            <label for="rptSchedFreq">Frequency</label>
+            <select id="rptSchedFreq" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+              <option value="daily">Daily</option>
+              <option value="weekly" selected>Weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="rptSchedRecipients">Recipients (comma-sep)</label>
+            <input type="text" id="rptSchedRecipients" placeholder="user@example.com" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+          </div>
+          <div class="form-group">
+            <label for="rptSchedFormat">Format</label>
+            <select id="rptSchedFormat" style="width:100%;padding:0.5rem 0.75rem;border:1px solid var(--gray-300);border-radius:6px;font-size:0.9rem;">
+              <option value="pdf">PDF</option>
+              <option value="csv">CSV</option>
+            </select>
+          </div>
+          <button type="button" class="btn btn-primary btn-sm" onclick="saveReportSchedule()" style="margin-bottom:0.25rem;">Add Schedule</button>
+        </div>
+      </div>
+      <div id="reportScheduleList">
+        <p style="color:var(--gray-500);text-align:center;padding:2rem;">Loading report schedules...</p>
+      </div>
+    </div>
   </div>
 
 </div>
@@ -2053,9 +2135,148 @@ const origSwitchTab = switchTab;
 switchTab = function(tabName) {
   origSwitchTab(tabName);
   if (tabName === 'schedules') loadSchedules();
-  if (tabName === 'notifications') loadWebhooks();
+  if (tabName === 'notifications') { loadWebhooks(); loadAlerts(); loadReportSchedules(); }
   if (tabName === 'budgets') { loadBudgets(); populateBudgetAccountSelect(); }
 };
+
+// ===================================================================
+// COST ALERTS
+// ===================================================================
+async function loadAlerts() {
+  try {
+    const res = await fetch('/api/alerts');
+    if (!res.ok) return;
+    const alerts = await res.json();
+    renderAlertList(alerts);
+  } catch {}
+}
+
+function renderAlertList(alerts) {
+  const el = document.getElementById('alertList');
+  if (!alerts.length) {
+    el.innerHTML = '<p style="color:var(--gray-500);text-align:center;padding:2rem;">No cost alerts configured.</p>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Name</th><th>Threshold</th><th>Period</th><th>Notify Via</th><th>Actions</th></tr></thead><tbody>';
+  for (const a of alerts) {
+    html += `<tr>
+      <td>${esc(a.name)}</td>
+      <td class="amount-cost">$${parseFloat(a.threshold_amount).toFixed(2)}</td>
+      <td>${esc(a.alert_type)}</td>
+      <td>${esc(a.notify_via)}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="deleteAlert('${a.id}')">Delete</button></td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+async function saveAlert() {
+  const name = document.getElementById('alertName').value;
+  const threshold = parseFloat(document.getElementById('alertThreshold').value);
+  if (!name) { alert('Please enter an alert name.'); return; }
+  if (isNaN(threshold) || threshold <= 0) { alert('Please enter a valid threshold amount.'); return; }
+  try {
+    const res = await fetch('/api/alerts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: name,
+        threshold_amount: threshold,
+        alert_type: document.getElementById('alertType').value,
+        notify_via: document.getElementById('alertNotifyVia').value,
+      }),
+    });
+    if (res.ok) {
+      document.getElementById('alertName').value = '';
+      document.getElementById('alertThreshold').value = '';
+      loadAlerts();
+    } else {
+      const err = await res.json();
+      alert('Failed to create alert: ' + (err.detail || 'Unknown error'));
+    }
+  } catch (e) {
+    alert('Failed to create alert: ' + e.message);
+  }
+}
+
+async function deleteAlert(id) {
+  if (!confirm('Delete this cost alert?')) return;
+  try {
+    await fetch(`/api/alerts/${id}`, { method: 'DELETE' });
+    loadAlerts();
+  } catch {}
+}
+
+// ===================================================================
+// SCHEDULED REPORTS
+// ===================================================================
+async function loadReportSchedules() {
+  try {
+    const res = await fetch('/api/report-schedules');
+    if (!res.ok) return;
+    const schedules = await res.json();
+    renderReportScheduleList(schedules);
+  } catch {}
+}
+
+function renderReportScheduleList(schedules) {
+  const el = document.getElementById('reportScheduleList');
+  if (!schedules.length) {
+    el.innerHTML = '<p style="color:var(--gray-500);text-align:center;padding:2rem;">No report schedules configured.</p>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Name</th><th>Frequency</th><th>Recipients</th><th>Format</th><th>Actions</th></tr></thead><tbody>';
+  for (const s of schedules) {
+    html += `<tr>
+      <td>${esc(s.name)}</td>
+      <td>${esc(s.frequency)}</td>
+      <td style="font-size:0.85rem;">${esc((s.recipients || []).join(', '))}</td>
+      <td>${esc((s.report_format || 'pdf').toUpperCase())}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="deleteReportSchedule('${s.id}')">Delete</button></td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+async function saveReportSchedule() {
+  const name = document.getElementById('rptSchedName').value;
+  const recipientsStr = document.getElementById('rptSchedRecipients').value;
+  if (!name) { alert('Please enter a schedule name.'); return; }
+  if (!recipientsStr) { alert('Please enter at least one recipient email.'); return; }
+  const recipients = recipientsStr.split(',').map(s => s.trim()).filter(Boolean);
+  try {
+    const res = await fetch('/api/report-schedules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: name,
+        frequency: document.getElementById('rptSchedFreq').value,
+        recipients: recipients,
+        report_format: document.getElementById('rptSchedFormat').value,
+      }),
+    });
+    if (res.ok) {
+      document.getElementById('rptSchedName').value = '';
+      document.getElementById('rptSchedRecipients').value = '';
+      loadReportSchedules();
+    } else {
+      const err = await res.json();
+      alert('Failed to create schedule: ' + (err.detail || 'Unknown error'));
+    }
+  } catch (e) {
+    alert('Failed to create schedule: ' + e.message);
+  }
+}
+
+async function deleteReportSchedule(id) {
+  if (!confirm('Delete this report schedule?')) return;
+  try {
+    await fetch(`/api/report-schedules/${id}`, { method: 'DELETE' });
+    loadReportSchedules();
+  } catch {}
+}
 </script>
 
 </body>

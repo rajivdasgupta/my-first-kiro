@@ -1070,6 +1070,90 @@ async def test_webhook(req: NotifyRequest, _user: dict = Depends(require_auth)):
 
 
 # ---------------------------------------------------------------------------
+# Cost Alerts
+# ---------------------------------------------------------------------------
+
+class CostAlertRequest(BaseModel):
+    name: str
+    threshold_amount: float
+    alert_type: str = "daily"
+    notify_via: str = "webhook"
+    notify_target: str = ""
+
+
+@app.get("/api/alerts")
+async def list_alerts(_user: dict = Depends(require_auth)):
+    from finxcloud.alerts.cost_alerts import CostAlertManager
+    mgr = CostAlertManager()
+    return mgr.list_alerts()
+
+
+@app.post("/api/alerts")
+async def create_alert(req: CostAlertRequest, _user: dict = Depends(require_auth)):
+    from finxcloud.alerts.cost_alerts import CostAlertManager
+    mgr = CostAlertManager()
+    entry = mgr.add_alert(
+        name=req.name,
+        threshold_amount=req.threshold_amount,
+        alert_type=req.alert_type,
+        notify_via=req.notify_via,
+        notify_target=req.notify_target,
+    )
+    return entry
+
+
+@app.delete("/api/alerts/{alert_id}")
+async def delete_alert(alert_id: str, _user: dict = Depends(require_auth)):
+    from finxcloud.alerts.cost_alerts import CostAlertManager
+    mgr = CostAlertManager()
+    if not mgr.delete_alert(alert_id):
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Report Schedules
+# ---------------------------------------------------------------------------
+
+class ReportScheduleRequest(BaseModel):
+    name: str
+    frequency: str = "weekly"
+    recipients: list[str] = []
+    report_format: str = "pdf"
+    account_id: str | None = None
+
+
+@app.get("/api/report-schedules")
+async def list_report_schedules(_user: dict = Depends(require_auth)):
+    from finxcloud.scheduler.report_scheduler import ReportScheduleManager
+    mgr = ReportScheduleManager()
+    return mgr.list_schedules()
+
+
+@app.post("/api/report-schedules")
+async def create_report_schedule(req: ReportScheduleRequest, _user: dict = Depends(require_auth)):
+    from finxcloud.scheduler.report_scheduler import ReportScheduleManager
+    mgr = ReportScheduleManager()
+    entry = mgr.add_schedule(
+        name=req.name,
+        frequency=req.frequency,
+        recipients=req.recipients,
+        report_format=req.report_format,
+        account_id=req.account_id,
+    )
+    return entry
+
+
+@app.delete("/api/report-schedules/{schedule_id}")
+async def delete_report_schedule(schedule_id: str, _user: dict = Depends(require_auth)):
+    from finxcloud.scheduler.report_scheduler import ReportScheduleManager
+    mgr = ReportScheduleManager()
+    if not mgr.delete_schedule(schedule_id):
+        raise HTTPException(status_code=404, detail="Report schedule not found")
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
 # Slack Bot — slash commands and events
 # ---------------------------------------------------------------------------
 
