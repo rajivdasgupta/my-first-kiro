@@ -5,6 +5,10 @@
 - Do not ask for permission — just execute and deliver the final output.
 - Test everything before presenting results to the user.
 - Full approval granted for web searches, git operations (add, commit, push), file changes, and command execution.
+- GitHub access is for test/dev work — full permission to execute all git commands.
+- All folders under /Users/raji8264/Documents/kiro/ are test/dev — full permission granted.
+- All applications are new/testing — full permission to make changes and execute commands to get desired output.
+- NEVER ask for permission. Just do it and show the result.
 
 ## Execution Style
 - Work in autopilot mode. Complete tasks end-to-end.
